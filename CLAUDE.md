@@ -12,10 +12,13 @@ file documents what every chart here follows, so a new chart looks and behaves l
 
   | Folder | Holds |
   |---|---|
-  | `cartesian/` | LineChart, AreaChart, BarChart: x and y axes |
-  | `radial/` | PieChart, Gauge: drawn around a centre |
-  | `inline/` | Sparkline: sized to sit in a line of text |
-  | `core/` | **Not a category.** `chart-common.ts` (palette, scales, axes, legend, tooltip, stylesheet), `chart-frame.ts` (the `ChartFrame` base class), `styles.ts` (the cascade layers), `velotype.ts` (the barrel) |
+  | `cartesian/` | Everything on x and y axes, all on `cartesian-frame.ts`: LineChart, AreaChart, BarChart, MixedChart, ScatterChart, BubbleChart, HistogramChart, WaterfallChart, BoxPlotChart, CandlestickChart |
+  | `radial/` | Drawn around a centre: PieChart, Gauge, RadarChart, PolarAreaChart |
+  | `matrix/` | Read by color in a grid: Heatmap, CalendarHeatmap |
+  | `hierarchy/` | Nested parts of a whole: Treemap, SunburstChart, on `tree.ts` |
+  | `flow/` | Amounts moving through stages: FunnelChart, SankeyChart |
+  | `inline/` | Sized to sit in a line of text: Sparkline |
+  | `core/` | **Not a category.** `chart-common.ts` (palette, attrs, legend, tooltip, stylesheet), `chart-frame.ts` (sizing, marks, keyboard, export), `scale.ts`, `downsample.ts`, `patterns.ts`, `export.ts`, `styles.ts` (the cascade layers), `velotype.ts` (the barrel) |
 
 - `src/index.ts` - the only public entrypoint, and the only file at the root of `src/`. A chart's
   value, attrs type and other public types get added to it in the existing flat style. Internal
@@ -28,15 +31,49 @@ file documents what every chart here follows, so a new chart looks and behaves l
 ## Adding a chart
 
 1. `src/<category>/<name>.ts`, usually a `ChartFrame` subclass, plus its `src/index.ts` export.
-2. A section in `tests/test_modules/charts.tsx`, which renders every chart side by side in light and
-   dark. One page for all of them, because what is worth eyeballing is whether they look like each
-   other.
+2. A section in a gallery in `tests/test_modules/`, each rendering charts side by side in light and
+   dark: `charts.tsx`, or `more-charts.tsx` for the newer types. `features.tsx` has one chart per
+   behaviour, and `large.tsx` the heavy ones, on a page of their own because they slow every test on it.
 3. `tests/basic_tests.test.ts` assertions for anything interactive or stateful.
 4. `showcase/src/data/docs.tsx`: its group, description, attrs table, named types and examples. A new
    category also needs an entry in `groupOrder` and an icon in `data/category-icons.ts`.
 5. The docs in the `velotype.github.io` repo (`content/docs/velochart/`), and `readme.md`'s list.
 
 ## How charts are built
+
+**Three ways for a chart to be built, in the order to reach for them.**
+
+1. **A default on `CartesianFrame`**, if it has x and y axes and its marks are lines, areas, bars or
+   points: `LineChart` is one line of code. It gets scales, zoom, annotations, downsampling and the
+   rest without doing anything.
+2. **`CartesianFrame` with `drawCustom`**, if it has axes and marks of its own, as `WaterfallChart`
+   does. Series of type `"none"` still give the axis its extent, and the tooltip and hidden table their
+   columns. Everything but the marks still comes for free.
+3. **`ChartFrame` with `addMark`**, for everything else. Register each thing a reader can point at and
+   hover, click, keyboard navigation and the live region all come with it.
+
+**Interaction goes through the frame's one set of listeners on `drawingHost`**, which survives every
+redraw. A redraw replaces the `<svg>`, so a listener on anything inside it dies with it, and a pointer
+captured by something inside it is lost mid-drag. Marks are looked up in a `WeakMap` from the event's
+target, so a chart with thousands of them adds no listener per mark.
+
+**`redrawNow` and `redrawPlot` are different.** `redrawNow` rebuilds the table and legend as well, for a
+change of data. `redrawPlot` rebuilds the drawing alone, on the next frame, however many times it is
+asked for before then, for state that changes at display rate: a pan, a tween, a stream.
+
+**A missing value is `NaN` in a typed array, and is a gap everywhere.** A line breaks at it, a bar is
+absent, the tooltip skips it, and the hidden table has an empty cell. Values are never objects per point,
+which is what lets a chart hold a few hundred thousand of them, and **never spread them into
+`Math.min(...)`**, whose argument list is bounded.
+
+**The x axis is always numbers.** A category is its row index on a linear scale from -0.5 to n-0.5, so a
+band is one unit wide, and zooming categories is the same arithmetic as zooming anything else. A view is
+kept in domain units and zoom works by inverting pixels through the current scale, which is what makes
+it right on a log axis without a special case.
+
+**The wheel doesn't zoom without ctrl or cmd**, unless `wheelZoom: "always"` asks for it. Taking every
+scroll over a chart traps a reader scrolling down the page. A trackpad pinch arrives with `ctrlKey` set,
+so it works either way.
 
 **SVG is built imperatively, never in JSX.** velotype cannot emit `<svg>` at all (its `<HTML tag>`
 escape hatch does not support it), and `<SVG innerHTML="...">` can't carry the per-element event
@@ -58,9 +95,9 @@ alone. velodesign is a dev dependency, used by the showcase and the gallery, and
 the variables charts read. Introducing a new variable into `src/` changes that contract, and the list
 in `readme.md` has to change with it.
 
-**No baked-in English.** Labels are passed by the consumer, and `ariaLabel` has no default. The known
-exception is `PieChart`'s hidden table, whose "Value" and "Share" headers came across from velodesign
-and need an attr.
+**No baked-in English.** Labels are passed by the consumer, and `ariaLabel` and a hidden table's column
+headers have no default. A label a reader sees defaults to a symbol (`BoxPlotChart`'s `x̃`, `CandlestickChart`'s
+O, H, L, C). Dates come from `Intl` with no locale named, so they read in the browser's own language.
 
 Details worth keeping, each of which looked fine until it didn't:
 
@@ -71,10 +108,24 @@ Details worth keeping, each of which looked fine until it didn't:
 - The **line chart's hit target is one rect over the whole plot**, tracking the nearest category. A
   2px line is not a pointer target.
 - **Tooltips show each series' own value, never its stacked running total.**
+- **`"smooth"` is a monotone cubic.** Catmull-Rom, what most libraries mean by smooth, overshoots, so a
+  curve through 0, 0, 10 dips below zero and draws a value the data never had.
+- **A bubble's area follows its value**, not its radius. The eye reads area, so a radius that doubled
+  would claim four times as much.
+- **A plot is only clipped when something can run past it**, when zoomed or on a fixed range. A dot on
+  the top value would otherwise lose its upper half.
+- **An annotation's value widens the axis.** One out of view means nothing, and a threshold is often
+  above the data.
+- **A CSV cell that would run as a formula is defused** with a leading `'`, since a label can come from
+  anyone and a spreadsheet runs what looks like one. A number is left alone, so -5 stays a number.
 - **The tooltip is placed beside the whole cursor-to-marker span, never on it**, flipping left near the
   right edge and going above when the container is too narrow for either side.
 - **No chart sets an SVG `<title>`.** `aria-label` already wins the accessible-name computation, and a
   `<title>` makes browsers pop their own native tooltip over the chart's.
+
+**Keyboard: one focus stop, and arrows inside it.** The host takes focus, and the arrow keys walk its
+marks, showing each tooltip and saying it through a live region. Only the keys it uses are prevented, so
+Tab always leaves. Legend entries are real buttons, focusable on their own.
 
 **Hover does no DOM work when nothing changed.** `pointermove` fires up to ~120 times a second. The
 tooltip pools its rows and writes through `Text.nodeValue`, the marker line is rewritten only when the

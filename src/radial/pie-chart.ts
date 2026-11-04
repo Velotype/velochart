@@ -30,8 +30,17 @@ export type PieChartAttrsType = {
     centerLabel?: string
     /** Smaller text under `centerLabel` */
     centerSubLabel?: string
+    /** Writes each slice's share on it, leaving out slices too thin to hold it (default: `false`) */
+    showValues?: boolean
     /** Shows each slice's share of the total in the tooltip (default: `true`) */
     showPercent?: boolean
+    /**
+     * Header of the value column in the visually-hidden table a screen reader reads. No default -
+     * this package doesn't assume a language, so the column is unnamed unless this is set.
+     */
+    valueLabel?: string
+    /** Header of the share-of-total column in that table. No default, for the same reason */
+    shareLabel?: string
 } & ChartBaseAttrsType & IdAttr & StylePassthroughAttrs
 
 /**
@@ -44,6 +53,11 @@ export type PieChartAttrsType = {
 export class PieChart extends ChartFrame<PieChartAttrsType> {
     #total(): number {
         return this.chartAttrs.data.reduce((sum, slice) => sum + Math.max(0, slice.value), 0)
+    }
+
+    /** What the drawn slices add up to, leaving out any the reader has turned off */
+    #shownTotal(): number {
+        return this.chartAttrs.data.reduce((sum, slice, i) => sum + (this.isEntryHidden(i) ? 0 : Math.max(0, slice.value)), 0)
     }
 
     protected override isEmpty(): boolean {
@@ -59,7 +73,7 @@ export class PieChart extends ChartFrame<PieChartAttrsType> {
     protected override dataTable(): ChartDataTable | undefined {
         const total = this.#total()
         return {
-            columns: ["", "Value", "Share"],
+            columns: ["", this.chartAttrs.valueLabel ?? "", this.chartAttrs.shareLabel ?? ""],
             rows: this.chartAttrs.data.map(slice => [
                 slice.label,
                 this.format(Math.max(0, slice.value)),
@@ -70,15 +84,17 @@ export class PieChart extends ChartFrame<PieChartAttrsType> {
 
     protected override draw(svg: SVGElement, width: number, height: number): void {
         const attrs = this.chartAttrs
-        const total = this.#total()
+        const total = this.#shownTotal()
+        const marks = svgEl("g", {class: "vtc-chart-marks-radial"})
         const cx = width / 2
         const cy = height / 2
         const radius = Math.max(1, Math.min(width, height) / 2 - 4)
         const innerRadius = radius * Math.min(0.9, Math.max(0, attrs.donut ?? 0))
 
+        const labels: SVGElement[] = []
         let angle = -Math.PI / 2
         attrs.data.forEach((slice, index) => {
-            const value = Math.max(0, slice.value)
+            const value = this.isEntryHidden(index) ? 0 : Math.max(0, slice.value)
             if (value <= 0) {
                 return
             }
@@ -87,7 +103,7 @@ export class PieChart extends ChartFrame<PieChartAttrsType> {
             const path = svgEl("path", {
                 class: "vtc-chart-arc",
                 d: arcPath(cx, cy, radius, innerRadius, angle, angle + sweep),
-                fill: color
+                fill: this.fillFor(index, color)
             })
 
             const midAngle = angle + sweep / 2
@@ -98,22 +114,29 @@ export class PieChart extends ChartFrame<PieChartAttrsType> {
                 value: (attrs.showPercent ?? true) ? `${this.format(value)} (${percent})` : this.format(value),
                 color
             }]
-            path.addEventListener("pointerenter", () => {
-                svg.classList.add("vtc-chart-hover")
-                path.classList.add("vtc-chart-arc-active")
-                const tipX = cx + Math.cos(midAngle) * tipRadius
-                this.tooltip.show("", rows,
-                    {left: tipX, right: tipX, y: cy + Math.sin(midAngle) * tipRadius},
-                    this.containerBounds())
+            const tipX = cx + Math.cos(midAngle) * tipRadius
+            this.addMark(path, {
+                title: "", rows,
+                anchor: {left: tipX, right: tipX, y: cy + Math.sin(midAngle) * tipRadius},
+                detail: {label: slice.label, index, value: slice.value},
             })
-            path.addEventListener("pointerleave", () => {
-                svg.classList.remove("vtc-chart-hover")
-                path.classList.remove("vtc-chart-arc-active")
-                this.tooltip.hide()
-            })
-            svg.appendChild(path)
+            marks.appendChild(path)
+            // Under 5% of the circle there is no room for the text, and the tooltip still says it
+            if (attrs.showValues && value / total >= 0.05) {
+                const text = svgEl("text", {
+                    class: "vtc-chart-value-label", x: tipX, y: cy + Math.sin(midAngle) * tipRadius,
+                    "dominant-baseline": "middle",
+                })
+                text.textContent = percent
+                labels.push(text)
+            }
             angle += sweep
         })
+        svg.appendChild(marks)
+        // After every slice, so one slice's text is never painted over by the next slice
+        for (const text of labels) {
+            svg.appendChild(text)
+        }
 
         if (innerRadius > 0 && attrs.centerLabel !== undefined) {
             const label = svgEl("text", {

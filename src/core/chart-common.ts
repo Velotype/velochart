@@ -43,7 +43,10 @@ export const ChartThemeOptions: {
     seriesColors: string[]
     /** Shown in place of a chart with no data (default: the U+2205 glyph) */
     emptySymbol: FunctionComponent<EmptyAttrs>
+    /** Every chart fills with patterns as well as color, unless its own `patterns` says otherwise (default: `false`) */
+    patterns: boolean
 } = {
+    patterns: false,
     seriesColors: [
         "var(--primary)",
         "var(--secondary)",
@@ -66,7 +69,13 @@ export function seriesColor(index: number, explicit?: string): string {
     return palette[index % palette.length]
 }
 
-/** One series in a cartesian chart (line, area, bar) */
+/** How one series is drawn on a cartesian chart. `"none"` isn't drawn, and still reads in the tooltip and the hidden table */
+export type ChartSeriesKind = "line" | "area" | "bar" | "scatter" | "none"
+
+/** How a line gets from one point to the next */
+export type ChartCurve = "linear" | "smooth" | "step" | "step-before" | "step-after"
+
+/** One series in a cartesian chart */
 export type ChartSeriesType = {
     /** Identifies this series, and is the key read out of each point's `values` */
     key: string
@@ -74,14 +83,96 @@ export type ChartSeriesType = {
     label?: string
     /** Overrides this series' palette slot with an explicit CSS color */
     color?: string
+    /** How this series is drawn (default: what the chart component draws) */
+    type?: ChartSeriesKind
+    /** Which y axis this series reads against (default: `"left"`) */
+    yAxis?: "left" | "right"
+    /** How a line or area joins its points (default: `"linear"`). `"smooth"` never overshoots a value */
+    curve?: ChartCurve
+    /** Draws this series' line dashed (default: `false`) */
+    dashed?: boolean
+    /** Starts this series hidden, for a reader to turn on from the legend (default: `false`) */
+    hidden?: boolean
+    /** Draws a trend through this series: a least-squares line, or a moving average over `window` points */
+    trendline?: "linear" | {type: "moving-average", window: number}
+    /** Writes this series' values beside its marks, as `showValues` does for every series */
+    showValues?: boolean
 }
 
-/** One category along the x axis, with a value per series */
+/** One position along the x axis, with a value per series */
 export type ChartPointType = {
-    /** The category's label, shown on the axis and in the tooltip */
-    label: string
-    /** Value per series `key`; a missing key is plotted as zero */
+    /** The name shown on a category axis and in the tooltip. A numeric or time `x` formats itself when this is unset */
+    label?: string
+    /** Where this point sits on a numeric or time x axis. Unset, the axis is categories in the order given */
+    x?: number | Date
+    /** Value per series `key`; a missing key is a gap, never a zero */
     values: Record<string, number | undefined>
+    /** Uncertainty per series `key`, drawn as an error bar: one number for either side, or `[below, above]` */
+    errors?: Record<string, number | [number, number] | undefined>
+}
+
+/** Something drawn on a chart to mark a value or a range, rather than data */
+export type ChartAnnotationType = {
+    /** A line across the plot at one value */
+    type: "line"
+    /** Which axis the value is on (default: `"y"`) */
+    axis?: "x" | "y" | "y2"
+    /** A position on that axis. On a category axis, a category's label or its index */
+    value: number | Date | string
+    label?: string
+    /** A CSS color (default: a quiet grey). Use `var(...)`, so it follows the theme */
+    color?: string
+    /** Draws it dashed (default: `false`) */
+    dashed?: boolean
+} | {
+    /** A shaded range across the plot */
+    type: "band"
+    axis?: "x" | "y" | "y2"
+    from: number | Date | string
+    to: number | Date | string
+    label?: string
+    color?: string
+} | {
+    /** A labelled point */
+    type: "point"
+    x: number | Date | string
+    y: number
+    label?: string
+    color?: string
+}
+
+/** A point a reader activated, as given to `onPointClick` */
+export type ChartPointDetail = {
+    /** The name of what was activated: its category, slice, cell or node */
+    label: string
+    /** Its position in the data the chart was given */
+    index: number
+    /** The series' `key`, on a chart that has series. Unset when the whole category was activated */
+    series?: string
+    /** The value, when the activated thing has exactly one */
+    value?: number
+}
+
+/** One axis's configuration on a cartesian chart */
+export type ChartAxisType = {
+    /** What the axis measures. An x axis defaults to `"category"`, or `"time"`/`"linear"` from its points' `x`; a value axis to `"linear"` */
+    type?: "category" | "linear" | "log" | "time"
+    /** A title drawn along the axis */
+    title?: string
+    /** Fixes the low end, rather than following the data */
+    min?: number
+    /** Fixes the high end, rather than following the data */
+    max?: number
+    /** Formats this axis's ticks and the tooltip values read against it (default: `formatValue`, or a date for a time axis) */
+    format?: (value: number) => string
+    /** About how many ticks to draw */
+    tickCount?: number
+    /** Runs the axis the other way (default: `false`) */
+    reverse?: boolean
+    /** Leaves out the grid lines (default: `false`) */
+    hideGrid?: boolean
+    /** Reads a time axis in UTC rather than the browser's zone (default: `false`) */
+    utc?: boolean
 }
 
 /** Attrs every chart in this package accepts */
@@ -115,32 +206,16 @@ export type ChartBaseAttrsType = {
     emptyMessage?: string
     /** Hides the legend even when there is more than one series (default: `false`) */
     hideLegend?: boolean
-}
-
-/** Rounds a raw axis range out to human-readable tick values */
-export function niceTicks(min: number, max: number, targetCount: number): number[] {
-    if (!Number.isFinite(min) || !Number.isFinite(max)) {
-        return [0]
-    }
-    if (min === max) {
-        // A flat series still needs an axis; give it one tick above and below rather than a
-        // degenerate zero-height scale that would divide by zero below.
-        return [min - 1, min, min + 1]
-    }
-    const rawStep = (max - min) / Math.max(1, targetCount)
-    const magnitude = Math.pow(10, Math.floor(Math.log10(rawStep)))
-    // 1/2/5/10 steps are what people read as round numbers, whatever the magnitude
-    const candidates = [1, 2, 5, 10].map(m => m * magnitude)
-    const step = candidates.find(c => c >= rawStep) ?? candidates[candidates.length - 1]
-    const start = Math.floor(min / step) * step
-    const end = Math.ceil(max / step) * step
-    const ticks: number[] = []
-    // Accumulate with an epsilon so float drift can't drop the final tick
-    for (let value = start; value <= end + step * 1e-9; value += step) {
-        // Re-round each step: repeated addition of 0.1 drifts visibly by the tenth tick
-        ticks.push(Number((Math.round(value / step) * step).toFixed(10)))
-    }
-    return ticks
+    /** Animates the first drawing and changes of data, unless the reader asked for reduced motion (default: `true`) */
+    animate?: boolean
+    /** Lets a reader hide and show entries by clicking the legend (default: `true`) */
+    legendToggle?: boolean
+    /** Fills series with patterns and dashes as well as color, for readers who can't tell the hues apart (default: `ChartThemeOptions.patterns`) */
+    patterns?: boolean
+    /** Lets a keyboard reader move through the marks with the arrow keys (default: `true`) */
+    keyboard?: boolean
+    /** Called when a reader activates a point, slice, cell or node */
+    onPointClick?: (detail: ChartPointDetail) => void
 }
 
 /** A chart's values in tabular form, which is what a screen reader reads instead of the drawing */
@@ -156,74 +231,6 @@ export type PlotBox = {
     top: number
     width: number
     height: number
-}
-
-/** Maps a value to a y pixel inside the plot box */
-export function yScale(box: PlotBox, min: number, max: number): (value: number) => number {
-    const span = max - min
-    if (span === 0) {
-        return () => box.top + box.height / 2
-    }
-    return (value: number) => box.top + box.height - ((value - min) / span) * box.height
-}
-
-/** Evenly spaced band centres across the plot box, one per category */
-export function bandCentres(box: PlotBox, count: number): number[] {
-    if (count <= 0) {
-        return []
-    }
-    if (count === 1) {
-        return [box.left + box.width / 2]
-    }
-    const step = box.width / count
-    return Array.from({length: count}, (_, i) => box.left + step * i + step / 2)
-}
-
-/**
- * Draws the horizontal grid lines and both sets of tick labels.
- *
- * Category labels are thinned rather than rotated when they would collide: a rotated label is
- * harder to read than an absent one, and the tooltip still names every point.
- */
-export function drawAxes(
-    root: SVGElement,
-    box: PlotBox,
-    ticks: number[],
-    toY: (value: number) => number,
-    categories: string[],
-    centres: number[],
-    formatValue: (value: number) => string
-): void {
-    for (const tick of ticks) {
-        const y = toY(tick)
-        root.appendChild(svgEl("line", {
-            class: "vtc-chart-gridline",
-            x1: box.left, y1: y, x2: box.left + box.width, y2: y
-        }))
-        const label = svgEl("text", {
-            class: "vtc-chart-tick vtc-chart-tick-y",
-            x: box.left - 6, y: y
-        })
-        label.textContent = formatValue(tick)
-        root.appendChild(label)
-    }
-
-    // One label per category if they fit, otherwise every nth - estimated from an average glyph
-    // width rather than measured, since measuring would mean a layout pass per label.
-    const longest = categories.reduce((n, c) => Math.max(n, c.length), 0)
-    const perLabel = Math.max(28, longest * 8.5)
-    const stride = Math.max(1, Math.ceil(perLabel / Math.max(1, box.width / Math.max(1, categories.length))))
-    categories.forEach((category, index) => {
-        if (index % stride !== 0) {
-            return
-        }
-        const label = svgEl("text", {
-            class: "vtc-chart-tick vtc-chart-tick-x",
-            x: centres[index], y: box.top + box.height + 18
-        })
-        label.textContent = category
-        root.appendChild(label)
-    })
 }
 
 let areChartStylesMounted = false
@@ -243,6 +250,8 @@ export function mountChartStyles(): void {
     mountStyles(
 `
 .vtc-chart{width:100%;box-sizing:border-box;display:flex;flex-direction:column;gap:0.5em;position:relative;}
+.vtc-chart-drawing{position:relative;}
+.vtc-chart-drawing:focus-visible{outline:2px solid var(--primary-7);outline-offset:2px;border-radius:0.25rem;}
 .vtc-chart-svg{display:block;width:100%;overflow:visible;}
 ` +
 /* Visually hidden, still read aloud - the standard clip pattern. This holds each chart's data as a
@@ -286,8 +295,49 @@ export function mountChartStyles(): void {
 .vtc-chart-bar{transition:opacity 0.12s ease-out;}
 .vtc-chart-arc{stroke:var(--background);stroke-width:2;transition:opacity 0.12s ease-out;}
 .vtc-chart-hit{fill:transparent;cursor:default;}
-.vtc-chart-hover .vtc-chart-bar,.vtc-chart-hover .vtc-chart-arc{opacity:0.45;}
-.vtc-chart-bar-active,.vtc-chart-arc-active{opacity:1 !important;}
+.vtc-chart-mark{transition:opacity 0.12s ease-out;}
+.vtc-chart-hover .vtc-chart-mark{opacity:0.45;}
+.vtc-chart-hover .vtc-chart-mark-active{opacity:1;}
+.vtc-chart-clickable .vtc-chart-mark,.vtc-chart-clickable .vtc-chart-hit{cursor:pointer;}
+.vtc-chart-point{stroke:var(--background);stroke-width:1;}
+.vtc-chart-whisker{stroke-width:1.5;fill:none;}
+.vtc-chart-cell{stroke:var(--background);stroke-width:1;}
+.vtc-chart-cell-empty{fill:var(--background-2);}
+.vtc-chart-cell-label{font-size:0.8em;font-family:inherit;text-anchor:middle;dominant-baseline:middle;pointer-events:none;fill:var(--text);stroke:var(--background);stroke-width:3px;paint-order:stroke;}
+.vtc-chart-node-label{fill:var(--text);font-size:0.85em;font-family:inherit;dominant-baseline:middle;pointer-events:none;}
+.vtc-chart-link{opacity:0.35;}
+.vtc-chart-hover .vtc-chart-link.vtc-chart-mark{opacity:0.15;}
+.vtc-chart-hover .vtc-chart-link.vtc-chart-mark-active{opacity:0.6;}
+.vtc-chart-scale{display:flex;align-items:center;justify-content:center;gap:0.5em;font-size:0.85em;color:var(--text);}
+.vtc-chart-scale-bar{width:8em;height:0.6em;border-radius:0.15em;}
+.vtc-chart-underlay{position:absolute;inset:0;pointer-events:none;overflow:hidden;}
+.vtc-chart-underlay + .vtc-chart-svg{position:relative;}
+.vtc-chart-canvas{display:block;}
+.vtc-chart-zoomable{cursor:grab;}
+.vtc-chart-brushable{cursor:crosshair;}
+.vtc-chart-dragging{cursor:grabbing;}
+.vtc-chart-brush{fill:var(--primary);opacity:0.15;stroke:var(--primary);pointer-events:none;}
+.vtc-chart-slider-track{fill:var(--background-2);}
+.vtc-chart-slider-line{fill:none;stroke:var(--background-6);stroke-width:1;pointer-events:none;}
+.vtc-chart-slider-window{fill:var(--primary);opacity:0.18;cursor:grab;}
+.vtc-chart-slider-handle{fill:var(--primary-7);cursor:ew-resize;}
+.vtc-chart-annotation-line{stroke:var(--background-7);stroke-width:1;pointer-events:none;}
+.vtc-chart-annotation-band{fill:var(--background-7);opacity:0.12;pointer-events:none;}
+.vtc-chart-annotation-point{fill:var(--background-7);stroke:var(--background);stroke-width:2;pointer-events:none;}
+.vtc-chart-annotation-label{fill:var(--text);font-size:0.8em;font-family:inherit;pointer-events:none;}
+.vtc-chart-value-label{fill:var(--text);font-size:0.8em;font-family:inherit;text-anchor:middle;pointer-events:none;stroke:var(--background);stroke-width:3px;paint-order:stroke;}
+.vtc-chart-error{stroke-width:1.5;fill:none;pointer-events:none;}
+.vtc-chart-trend{fill:none;stroke-width:1.5;stroke-dasharray:6 4;opacity:0.8;pointer-events:none;}
+.vtc-chart-crosshair{stroke:var(--background-6);stroke-width:1;stroke-dasharray:3 3;pointer-events:none;shape-rendering:crispedges;}
+.vtc-chart-crosshair-badge{fill:var(--background-7);pointer-events:none;}
+.vtc-chart-crosshair-text{fill:var(--background);font-size:0.75em;font-family:inherit;dominant-baseline:middle;text-anchor:middle;pointer-events:none;}
+.vtc-chart-ring{fill:none;stroke:var(--background-3);stroke-width:1;pointer-events:none;}
+.vtc-chart-ring-label{dominant-baseline:middle;pointer-events:none;}
+.vtc-chart-spoke{stroke:var(--background-3);stroke-width:1;}
+.vtc-chart-spoke-label{dominant-baseline:middle;}
+.vtc-chart-sector{fill:transparent;}
+.vtc-chart-axis-title{fill:var(--background-7);font-size:0.85em;font-weight:500;font-family:inherit;text-anchor:middle;}
+.vtc-chart-tick-y2{text-anchor:start;dominant-baseline:middle;}
 .vtc-chart-empty{
 display:flex;
 align-items:center;
@@ -330,6 +380,14 @@ color:var(--background-6);
 `
 .vtc-chart-legend-item{display:inline-flex;align-items:center;gap:0.4em;color:var(--text);font-weight:500;}
 .vtc-chart-legend-swatch{width:0.75em;height:0.75em;border-radius:0.15em;flex-shrink:0;}
+.vtc-chart-legend-toggle{appearance:none;border:0;background:none;padding:0.1em 0.2em;margin:0;font:inherit;cursor:pointer;border-radius:0.25em;}
+.vtc-chart-legend-toggle:hover{background-color:var(--background-2);}
+.vtc-chart-legend-toggle[aria-pressed="false"]{color:var(--background-6);text-decoration:line-through;}
+.vtc-chart-legend-toggle[aria-pressed="false"] .vtc-chart-legend-swatch{opacity:0.3;}
+.vtc-chart-enter .vtc-chart-marks{animation:vtc-chart-reveal 0.5s ease-out;}
+.vtc-chart-enter .vtc-chart-marks-radial{animation:vtc-chart-grow 0.4s ease-out;transform-box:fill-box;transform-origin:center;}
+@keyframes vtc-chart-reveal{from{clip-path:inset(-10% 100% -10% -10%);}to{clip-path:inset(-10% -10% -10% -10%);}}
+@keyframes vtc-chart-grow{from{opacity:0;transform:scale(0.85);}to{opacity:1;transform:none;}}
 ` +
 /* Tooltip - positioned by the chart, so it needs no layout of its own beyond staying on top */
 `
@@ -354,30 +412,45 @@ transition:opacity 0.1s ease-out;
 .vtc-chart-tooltip-name{display:inline-flex;align-items:center;gap:0.4em;}
 .vtc-chart-tooltip-value{font-variant-numeric:tabular-nums;}
 @media (prefers-reduced-motion: reduce){
-.vtc-chart-bar,.vtc-chart-arc,.vtc-chart-tooltip{transition:none;}
+.vtc-chart-bar,.vtc-chart-arc,.vtc-chart-mark,.vtc-chart-tooltip{transition:none;}
+.vtc-chart-enter .vtc-chart-marks,.vtc-chart-enter .vtc-chart-marks-radial{animation:none;}
 }
 `, "vtc/Chart", "base")
 }
 
 /** Builds the legend row; returns undefined when there is nothing worth labelling */
-export function buildLegend(entries: {label: string, color: string}[]): HTMLDivElement | undefined {
+export function buildLegend(
+    entries: {label: string, color: string}[],
+    onToggle: ((index: number) => void) | undefined,
+    swatchBackground?: (slot: number) => string
+): HTMLDivElement | undefined {
     if (entries.length === 0) {
         return undefined
     }
     const legend = document.createElement("div")
     legend.className = "vtc-chart-legend"
-    for (const entry of entries) {
-        const item = document.createElement("span")
+    entries.forEach((entry, index) => {
+        // A real button when it does something, so keyboard and screen reader support come with it
+        const item = document.createElement(onToggle ? "button" : "span")
         item.className = "vtc-chart-legend-item"
+        if (onToggle) {
+            (item as HTMLButtonElement).type = "button"
+            item.classList.add("vtc-chart-legend-toggle")
+            item.addEventListener("click", () => onToggle(index))
+        }
         const swatch = document.createElement("span")
         swatch.className = "vtc-chart-legend-swatch"
         swatch.style.backgroundColor = entry.color
+        if (swatchBackground) {
+            swatch.style.backgroundImage = swatchBackground(index)
+            swatch.style.backgroundSize = "6px 6px"
+        }
         const text = document.createElement("span")
         text.textContent = entry.label
         item.appendChild(swatch)
         item.appendChild(text)
         legend.appendChild(item)
-    }
+    })
     return legend
 }
 
