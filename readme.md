@@ -66,6 +66,8 @@ WaterfallChart, BoxPlotChart, CandlestickChart
 
 **Inline** - Sparkline
 
+**Dashboard** - TimeWindow, TimeWindowControl
+
 ## What they can do
 
 Every chart with x and y axes runs on one engine, so all of this works on all of them:
@@ -90,6 +92,25 @@ import { getComponent } from "@velotype/velotype"
 const chart = getComponent<LineChart>(<LineChart zoom="x" data={days} series={series}/>)
 chart.update({data: newDays})
 const csv = chart.toCsv()
+```
+
+## Dashboards
+
+Give every chart on a page the same `TimeWindow`, and one control, a drag on any chart, and a zoom on
+any chart move them all, with their hover cursors shared.
+
+```tsx
+import { LineChart, TimeWindow, TimeWindowControl } from "@velotype/velochart"
+
+const HOUR = 3_600_000
+const timeWindow = new TimeWindow({span: 6 * HOUR})
+
+<TimeWindowControl timeWindow={timeWindow} labels={{previous: "Earlier", next: "Later", live: "Live"}}/>
+<LineChart timeWindow={timeWindow} data={latency} series={latencySeries} xAxis={{type: "time"}}/>
+<LineChart timeWindow={timeWindow} data={traffic} series={trafficSeries} xAxis={{type: "time"}}/>
+
+// Anything without a time axis, or data the server holds, listens for where it settles
+timeWindow.subscribeSettled(async (range) => gauge.update({value: await fetchAverage(range)}))
 ```
 
 ## Development

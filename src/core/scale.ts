@@ -105,6 +105,7 @@ const DAY = 24 * HOUR
 
 /** The spacings a time axis may use. Months and years come out of the calendar rather than a duration */
 const TIME_STEPS: {unit: "ms" | "day" | "month", step: number, size: number}[] = [
+    ...[1, 2, 5, 10, 25, 50, 100, 250, 500].map(step => ({unit: "ms" as const, step, size: step})),
     {unit: "ms", step: SECOND, size: SECOND},
     {unit: "ms", step: 5 * SECOND, size: 5 * SECOND},
     {unit: "ms", step: 15 * SECOND, size: 15 * SECOND},
@@ -173,15 +174,24 @@ export function timeTicks(min: number, max: number, targetCount: number, utc: bo
         ? (choice.step >= 12 ? {year: "numeric", timeZone} : {month: "short", year: "2-digit", timeZone})
         : choice.unit === "day"
             ? {month: "short", day: "numeric", timeZone}
-            : (choice.size < MINUTE
-                ? {hour: "numeric", minute: "2-digit", second: "2-digit", timeZone}
-                : {hour: "numeric", minute: "2-digit", timeZone})
+            : (choice.size < SECOND
+                ? {hour: "numeric", minute: "2-digit", second: "2-digit", fractionalSecondDigits: 3, timeZone}
+                : choice.size < MINUTE
+                    ? {hour: "numeric", minute: "2-digit", second: "2-digit", timeZone}
+                    : {hour: "numeric", minute: "2-digit", timeZone})
     const formatter = new Intl.DateTimeFormat(undefined, options)
     return {ticks, format: (value) => formatter.format(value)}
 }
 
-/** A date and time in full, for a tooltip naming one exact moment */
+/**
+ * A date and time in full, for a tooltip naming one exact moment, as fine as that moment needs: a point
+ * on the minute reads to the minute, and one between seconds reads to the millisecond.
+ */
 export function fullTimeFormat(utc: boolean): (value: number) => string {
-    const formatter = new Intl.DateTimeFormat(undefined, {dateStyle: "medium", timeStyle: "short", timeZone: utc ? "UTC" : undefined})
-    return (value) => formatter.format(value)
+    const timeZone = utc ? "UTC" : undefined
+    const day = {year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone} as const
+    const toMinute = new Intl.DateTimeFormat(undefined, day)
+    const toSecond = new Intl.DateTimeFormat(undefined, {...day, second: "2-digit"})
+    const toMillisecond = new Intl.DateTimeFormat(undefined, {...day, second: "2-digit", fractionalSecondDigits: 3})
+    return (value) => (value % SECOND !== 0 ? toMillisecond : value % MINUTE !== 0 ? toSecond : toMinute).format(value)
 }

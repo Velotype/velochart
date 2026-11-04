@@ -5,6 +5,8 @@ import { Icon, registerIcon } from "@velotype/velodesign"
  * is all `Icon` carries - a solid silhouette inheriting its colour from the row it sits in.
  */
 const categoryIcons: Record<string, string> = {
+    // Four panels, the top row taller
+    "Dashboard": "M3 3h8v10H3zM13 3h8v10h-8zM3 15h8v6H3zM13 15h8v6h-8z",
     // Three ascending bars
     "Cartesian": "M3 13h4.5v8H3zM9.75 7.5h4.5V21h-4.5zM16.5 3h4.5v18h-4.5z",
     // A pie with one slice pulled out to the upper right

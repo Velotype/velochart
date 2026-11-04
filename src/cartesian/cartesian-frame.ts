@@ -1,3 +1,4 @@
+import type { TimeWindow } from "../dashboard/time-window.ts"
 import { ChartFrame } from "../core/chart-frame.ts"
 import { seriesColor, svgEl } from "../core/chart-common.ts"
 import type {
@@ -60,6 +61,12 @@ export type CartesianAttrsType = {
     /** Charts sharing this name move their hover cursors together, and zoom together */
     syncGroup?: string
     /**
+     * Shows the range this window is on, whatever the data covers, and sends a reader's zoom and pan to
+     * it, so every chart on it moves together. Dragging selects a range to look at, and hover cursors
+     * are shared unless `syncGroup` says otherwise. Needs a time or numeric x axis, and not `horizontal`.
+     */
+    timeWindow?: TimeWindow
+    /**
      * Lets a reader zoom and pan these axes (default: off). Drag pans, ctrl or cmd and the wheel zooms, a
      * pinch zooms on a touch screen or trackpad, and a double click goes back to everything. Not for
      * `horizontal` bars.
@@ -116,6 +123,8 @@ type Axis = {scale: Scale, ticks: number[], format: (value: number) => string, d
 
 /** Everything one drawing worked out, which a later hover reads rather than recomputing */
 type Layout = {
+    /** The whole drawing's width, which a long label at either end has to stay inside */
+    width: number
     box: PlotBox
     x: Axis
     yLeft: Axis
@@ -197,10 +206,22 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
     #ownsData = false
     /** The width of a view to keep at the live edge on the next drawing, after `appendData` */
     #followSpan: number | undefined
+    #leaveTimeWindow: (() => void) | undefined
+    /** The moment a live chart's cursor is on, to find again after a drawing removes the cursor */
+    #cursorX: number | undefined
 
     override mount() {
         super.mount()
-        const group = this.chartAttrs.syncGroup
+        this.#joinShared()
+    }
+
+    override unmount() {
+        super.unmount()
+        this.#leaveShared()
+    }
+
+    #joinShared(): void {
+        const group = this.chartAttrs.syncGroup ?? this.chartAttrs.timeWindow?.syncGroup
         if (group !== undefined) {
             const member = joinSyncGroup(group, {
                 cursor: (x) => this.#showSyncedCursor(x),
@@ -210,14 +231,44 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
             this.#broadcastView = member.broadcastView
             this.#leaveSyncGroup = member.leave
         }
+        this.#leaveTimeWindow = this.chartAttrs.timeWindow?.subscribe(() => {
+            this.#applyTimeWindow()
+            // A reader who moved the window is no longer reading that moment. A live window moving by
+            // itself isn't them moving on, so the next drawing shows the same moment where it now is
+            if (!this.chartAttrs.timeWindow?.isLive()) {
+                this.#clearCursor()
+                this.tooltip.hide()
+            }
+            this.redrawPlot()
+        })
     }
 
-    override unmount() {
-        super.unmount()
+    #leaveShared(): void {
         this.#leaveSyncGroup?.()
         this.#leaveSyncGroup = undefined
         this.#broadcastCursor = undefined
         this.#broadcastView = undefined
+        this.#leaveTimeWindow?.()
+        this.#leaveTimeWindow = undefined
+    }
+
+    /** The window this chart follows. A row of categories or a horizontal chart has no time to follow */
+    #activeTimeWindow(): TimeWindow | undefined {
+        const timeWindow = this.chartAttrs.timeWindow
+        if (!timeWindow || (this.chartAttrs.horizontal ?? false)) {
+            return undefined
+        }
+        this.#ensureRows()
+        return this.#xKind === "category" ? undefined : timeWindow
+    }
+
+    /** Takes x from the window. A zoom on y is this chart's own, and stays */
+    #applyTimeWindow(): void {
+        const timeWindow = this.#activeTimeWindow()
+        if (timeWindow) {
+            const {from, to} = timeWindow.getRange()
+            this.#view = {...this.#view, xMin: from, xMax: to}
+        }
     }
 
     /** Zooms to a range. An axis left out of `view` stays as it is */
@@ -257,8 +308,9 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         if (max !== undefined && data.length > max) {
             data.splice(0, data.length - max)
         }
-        // Worked out against the edge as last drawn, however many calls arrive before the next frame
-        if (this.#view && this.#view.xMax >= this.#fullX[1]) {
+        // Worked out against the edge as last drawn, however many calls arrive before the next frame. A
+        // chart on a time window goes where the window says instead
+        if (this.#view && !this.#activeTimeWindow() && this.#view.xMax >= this.#fullX[1]) {
             this.#followSpan = this.#view.xMax - this.#view.xMin
         }
         this.#rows = undefined
@@ -267,6 +319,23 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
     }
 
     #setView(view: View | undefined, announce: boolean): void {
+        const timeWindow = this.#activeTimeWindow()
+        if (timeWindow) {
+            // Only a reader's move reaches the window. Going back to everything means less here, since
+            // what "everything" is belongs to the page, so it is a step out
+            if (announce) {
+                this.#view = view
+                if (view) {
+                    timeWindow.setRange(view.xMin, view.xMax)
+                } else {
+                    timeWindow.zoomOut()
+                }
+                this.#applyTimeWindow()
+                this.redrawPlot()
+                this.chartAttrs.onZoom?.(this.getView())
+            }
+            return
+        }
         this.#view = view
         this.redrawPlot()
         if (announce) {
@@ -286,7 +355,7 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
     }
 
     #canBrush(): boolean {
-        return this.chartAttrs.brush !== undefined && !(this.chartAttrs.horizontal ?? false)
+        return (this.chartAttrs.brush !== undefined || this.#activeTimeWindow() !== undefined) && !(this.chartAttrs.horizontal ?? false)
     }
 
     #markInteractive(svg: SVGElement): void {
@@ -344,6 +413,15 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         const fromLows = this.#shownLows
         const rowCount = this.#rows?.length ?? -1
         this.#rows = undefined
+        if ("timeWindow" in changed || "syncGroup" in changed) {
+            if (this.#leaveSyncGroup || this.#leaveTimeWindow) {
+                this.#leaveShared()
+                this.#joinShared()
+            }
+            if (!this.#activeTimeWindow()) {
+                this.#view = undefined
+            }
+        }
         if (!changed.data && !changed.series) {
             return
         }
@@ -351,8 +429,9 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
             this.#ownsData = false
         }
         const rows = this.#ensureRows()
-        // A view showing nothing of the new data would look like a chart with no data
-        if (this.#view) {
+        // A view showing nothing of the new data would look like a chart with no data. A window showing
+        // nothing is the answer to what was asked, and the page moves it
+        if (this.#view && !this.#activeTimeWindow()) {
             const [min, max] = this.#xDomain(rows, this.padsX())
             if (this.#view.xMin >= max || this.#view.xMax <= min) {
                 this.#view = undefined
@@ -513,6 +592,7 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
 
     protected override draw(svg: SVGElement, width: number, height: number): void {
         const rows = this.#ensureRows()
+        this.#applyTimeWindow()
         if (this.#followSpan !== undefined && this.#view) {
             const edge = this.#xDomain(rows, this.padsX())[1]
             this.#view = {...this.#view, xMin: edge - this.#followSpan, xMax: edge}
@@ -541,6 +621,9 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         this.#drawSlider(svg, layout)
         this.#attachHover(svg, layout)
         this.#markInteractive(svg)
+        if (this.#cursorX !== undefined && this.chartAttrs.timeWindow?.isLive()) {
+            this.#showSyncedCursor(this.#cursorX)
+        }
     }
 
     #xDomain(rows: Row[], padded: boolean): [number, number] {
@@ -749,7 +832,7 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
             scale: this.#makeScale(this.#xKind, this.#fullX[0], this.#fullX[1], box.left, box.left + box.width),
         } : undefined
         const fixed = [attrs.xAxis, leftDef, rightDef].some(axis => axis?.min !== undefined || axis?.max !== undefined)
-        return {box, x, yLeft, yRight, start, end, slot, slider, clip: view !== undefined || fixed}
+        return {width, box, x, yLeft, yRight, start, end, slot, slider, clip: view !== undefined || fixed}
     }
 
     /** The first row at or past a value */
@@ -792,7 +875,14 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         }
         const target = count ?? Math.max(2, Math.floor(length / 90))
         if (this.#xKind === "time") {
-            const {ticks, format} = timeTicks(scale.min, scale.max, target, definition.utc ?? false)
+            const utc = definition.utc ?? false
+            const first = timeTicks(scale.min, scale.max, target, utc)
+            const label = definition.format ?? first.format
+            // Spaced for an ordinary label. Times down to the millisecond are longer, so they take fewer ticks
+            const room = Math.max(...first.ticks.map(tick => label(tick).length), 0) * GLYPH + 16
+            const {ticks, format} = first.ticks.length * room > length && count === undefined
+                ? timeTicks(scale.min, scale.max, Math.max(1, Math.floor(length / room)), utc)
+                : first
             return {scale, ticks, format: definition.format ?? format, definition}
         }
         const format = definition.format ?? ((value: number) => this.format(value))
@@ -850,7 +940,17 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
             }
         }
         for (const value of x.ticks) {
-            tick("vtc-chart-tick-x", x.scale.map(value), bottom + 18, x.format(value))
+            const px = x.scale.map(value)
+            const text = x.format(value)
+            const half = text.length * GLYPH / 2
+            // A long label at an end of the axis lines up with the edge of the drawing rather than running past it
+            if (px + half > layout.width) {
+                tick("vtc-chart-tick-x vtc-chart-tick-end", layout.width, bottom + 18, text)
+            } else if (px - half < 0) {
+                tick("vtc-chart-tick-x vtc-chart-tick-start", 0, bottom + 18, text)
+            } else {
+                tick("vtc-chart-tick-x", px, bottom + 18, text)
+            }
         }
         // The baseline sits at zero when zero is in view, so negative values hang below a real axis
         const baseline = yLeft.scale.kind === "log" || yLeft.scale.min > 0 || yLeft.scale.max < 0
@@ -1348,7 +1448,7 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         }
         const {box} = layout
         if (mode === "index") {
-            const line = svgEl("line", {class: "vtc-chart-gridline", y1: box.top, y2: box.top + box.height})
+            const line = svgEl("line", {class: "vtc-chart-cursor", y1: box.top, y2: box.top + box.height})
             line.setAttribute("visibility", "hidden")
             svg.appendChild(line)
             this.#cursorLine = line
@@ -1432,6 +1532,8 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         }
         const pixel = layout.x.scale.map(x)
         if (pixel < layout.box.left || pixel > layout.box.left + layout.box.width) {
+            this.#clearCursor()
+            this.tooltip.hide()
             return
         }
         this.#showRow(layout, this.#nearestRow(layout, pixel), pixel, layout.box.top + layout.box.height / 2)
@@ -1468,8 +1570,11 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         return x >= box.left && x <= box.left + box.width && y >= box.top && y <= box.top + box.height
     }
 
-    /** Keeps an x range within the data and no tighter than the closest two points */
-    #clampX(min: number, max: number): [number, number] {
+    /**
+     * Keeps an x range within the data and no tighter than the closest two points. A window may look
+     * past the data, so only its overview, which draws nothing else, holds it in unless `withinData`.
+     */
+    #clampX(min: number, max: number, withinData: boolean = !this.#activeTimeWindow()): [number, number] {
         const [fullMin, fullMax] = this.#fullX
         const rows = this.#rows as Row[]
         const tightest = this.#xKind === "category" ? 1 : this.#smallestGap(rows)
@@ -1479,6 +1584,9 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
             const middle = (low + high) / 2
             low = middle - tightest / 2
             high = middle + tightest / 2
+        }
+        if (!withinData) {
+            return [low, high]
         }
         if (high - low >= fullMax - fullMin) {
             return [fullMin, fullMax]
@@ -1521,7 +1629,7 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         const next = this.#viewFromPixels(layout, x0, x1, y0, y1, zoomY)
         const [fullMin, fullMax] = this.#fullX
         // Zoomed back out to everything, which is not a view at all: the y axis goes back to following the data
-        if (next.xMin <= fullMin && next.xMax >= fullMax && factor > 1) {
+        if (!this.#activeTimeWindow() && next.xMin <= fullMin && next.xMax >= fullMax && factor > 1) {
             this.#setView(undefined, true)
         } else {
             this.#setView(next, true)
@@ -1630,8 +1738,8 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
             } else {
                 xMax = Math.max(xMax + delta, xMin)
             }
-            const [low, high] = this.#clampX(xMin, xMax)
-            this.#setView(low <= fullMin && high >= fullMax ? undefined : {...this.#view, xMin: low, xMax: high}, true)
+            const [low, high] = this.#clampX(xMin, xMax, true)
+            this.#setView(low <= fullMin && high >= fullMax && !this.#activeTimeWindow() ? undefined : {...this.#view, xMin: low, xMax: high}, true)
         }
     }
 
@@ -1693,7 +1801,7 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
             }
         }
         this.chartAttrs.onBrush?.({xMin, xMax, yMin, yMax, points})
-        if (this.chartAttrs.brushZoom ?? this.#canZoom()) {
+        if (this.chartAttrs.brushZoom ?? (this.#canZoom() || this.#activeTimeWindow() !== undefined)) {
             const [low, high] = this.#clampX(xMin, xMax)
             const yLeft = whole || yMin === undefined || yMax === undefined ? this.#view?.yLeft : [yMin, yMax] as [number, number]
             this.#setView({xMin: low, xMax: high, yLeft, yRight: this.#view?.yRight}, true)
@@ -1776,6 +1884,7 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
     }
 
     #clearCursor(): void {
+        this.#cursorX = undefined
         this.#cursorRow = -1
         this.#cursorLine?.setAttribute("visibility", "hidden")
     }
@@ -1888,6 +1997,7 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
     }
 
     #showRow(layout: Layout, rowIndex: number, x: number, y: number): void {
+        this.#cursorX = layout.x.scale.invert(x)
         const rows = this.#rows as Row[]
         const row = rows[rowIndex]
         if (!row) {

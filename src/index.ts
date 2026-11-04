@@ -20,6 +20,8 @@ import { SankeyChart, type SankeyChartAttrsType, type SankeyLinkType, type Sanke
 import { PieChart, type PieChartAttrsType, type PieSliceType } from "./radial/pie-chart.ts"
 import { Gauge, type GaugeAttrsType, type GaugeBandType } from "./radial/gauge.ts"
 import { Sparkline, type SparklineAttrsType, type SparklineVariant } from "./inline/sparkline.ts"
+import { TimeWindow, type TimeRange, type TimeWindowOptions } from "./dashboard/time-window.ts"
+import { TimeWindowControl, type TimeWindowControlAttrsType, type TimeWindowLabelsType, type TimeWindowPresetType } from "./dashboard/time-window-control.ts"
 import { ChartThemeOptions, type ChartAnnotationType, type ChartAxisType, type ChartBaseAttrsType, type ChartCurve, type ChartPointDetail, type ChartPointType, type ChartSeriesKind, type ChartSeriesType } from "./core/chart-common.ts"
 
 export {
@@ -79,6 +81,13 @@ export {
     Sparkline,
     type SparklineAttrsType,
     type SparklineVariant,
+    TimeWindow,
+    type TimeRange,
+    type TimeWindowOptions,
+    TimeWindowControl,
+    type TimeWindowControlAttrsType,
+    type TimeWindowLabelsType,
+    type TimeWindowPresetType,
     ChartThemeOptions,
     type ChartViewType,
     type DownsampleAlgorithm,
