@@ -101,6 +101,7 @@ From the repository root:
   prop
 - `deno task test` - bundle the gallery and run the test suite (headless Chrome via Astral)
 - `deno task check-baseline` - refuse web features that are not Baseline widely available
+- `deno task check-html-strings` - refuse APIs that turn a string into DOM
 - `deno task size` - measure the whole library bundled and minified, raw and gzipped
 - `cd showcase && deno task dev` - build and serve the showcase on `http://localhost:4000`
 

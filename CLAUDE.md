@@ -172,13 +172,23 @@ which would ship in every consumer's bundle.
 
 `deno task check-baseline` enforces this in CI with the same deny-list as velodesign.
 
+## No HTML strings
+
+Nothing in this package turns a string into DOM: no `innerHTML`, `outerHTML`, `insertAdjacentHTML`,
+`DOMParser` and the like, and none of velotype's `HTML`, `SVG` and `MATH` components, which set
+`innerHTML` from a string. Build nodes instead. A consumer's text can then never become markup, and
+the package works on a page with a strict Trusted Types policy.
+
+Two checks guard it. `deno task check-html-strings` refuses those APIs in CI, and every page in the
+Astral suite is served under `require-trusted-types-for 'script'`, so a test that reaches one throws.
+
 ## Changes reach `main` through a pull request, and CI is the reviewer
 
 `main` is protected: no direct pushes, no force-pushes, no deletion, squash merges only, no bypass.
 
 | Workflow | Runs on | What it gates |
 |---|---|---|
-| `ci.yml` - *Typecheck, lint and publish dry run* | PR + push to main | `deno check` on the package, showcase and tests; `deno lint`; `deno task check-jsx`; `deno task check-baseline`; `deno publish --dry-run` |
+| `ci.yml` - *Typecheck, lint and publish dry run* | PR + push to main | `deno check` on the package, showcase and tests; `deno lint`; `deno task check-jsx`; `deno task check-baseline`; `deno task check-html-strings`; `deno publish --dry-run` |
 | `ci.yml` - *Astral suite* | PR + push to main | `deno task test`, which bundles the gallery and drives it |
 | `bundle-size.yml` | PR | Comments the size against the base branch. Advisory |
 | `auto-merge.yml` | PR | Turns on GitHub's auto-merge, so a non-draft PR from a branch here merges once the required checks pass |
