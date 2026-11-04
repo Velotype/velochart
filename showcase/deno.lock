@@ -45,7 +45,7 @@
       "jsr:@velotype/velotype@~0.3.1"
     ],
     "links": {
-      "jsr:@velotype/velochart@0.1.0": {
+      "jsr:@velotype/velochart@0.0.1": {
         "dependencies": [
           "jsr:@astral/astral@~0.5.4",
           "jsr:@std/assert@^1.0.16",
