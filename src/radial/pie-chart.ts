@@ -103,7 +103,7 @@ export class PieChart extends ChartFrame<PieChartAttrsType> {
             const path = svgEl("path", {
                 class: "vtc-chart-arc",
                 d: arcPath(cx, cy, radius, innerRadius, angle, angle + sweep),
-                fill: color
+                fill: this.fillFor(index, color)
             })
 
             const midAngle = angle + sweep / 2

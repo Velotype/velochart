@@ -59,7 +59,7 @@ export class FunnelChart extends ChartFrame<FunnelChartAttrsType> {
             const path = svgEl("path", {
                 class: "vtc-chart-arc",
                 d: `M ${centre - topWidth / 2} ${top} L ${centre + topWidth / 2} ${top} L ${centre + bottomWidth / 2} ${top + stageHeight - gap} L ${centre - bottomWidth / 2} ${top + stageHeight - gap} Z`,
-                fill: color,
+                fill: this.fillFor(i, color),
             })
             const share = `${((stage.value / first) * 100).toFixed(1)}%`
             this.addMark(path, {

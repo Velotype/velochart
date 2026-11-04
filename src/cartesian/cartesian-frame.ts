@@ -366,11 +366,19 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
     }
 
     protected override dataTable(): ChartDataTable | undefined {
+        return this.#table(this.chartAttrs.maxTableRows ?? 1000)
+    }
+
+    protected override exportTable(): ChartDataTable | undefined {
+        return this.#table(undefined)
+    }
+
+    #table(limit: number | undefined): ChartDataTable {
         const {series} = this.chartAttrs
         const rows = this.#ensureRows()
         // Sampled evenly past the cap: a hundred thousand table rows would be slower than the chart, and
         // no one is reading them aloud one at a time.
-        const every = Math.max(1, Math.ceil(rows.length / (this.chartAttrs.maxTableRows ?? 1000)))
+        const every = limit === undefined ? 1 : Math.max(1, Math.ceil(rows.length / limit))
         return {
             columns: ["", ...series.map(s => s.label ?? s.key)],
             // Each series' own value, not the stacked running total - the same choice the tooltip
@@ -934,7 +942,7 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
                 if (canvas) {
                     canvas.area(run.top, run.bottom, color, curve)
                 } else {
-                    parent.appendChild(svgEl("path", {class: "vtc-chart-area", d: areaPath(run.top, run.bottom, curve), fill: color}))
+                    parent.appendChild(svgEl("path", {class: "vtc-chart-area", d: areaPath(run.top, run.bottom, curve), fill: this.fillFor(seriesIndex, color)}))
                 }
             }
             if (run.top.length > 1) {
@@ -943,7 +951,7 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
                 } else {
                     parent.appendChild(svgEl("path", {
                         class: "vtc-chart-line", d: linePath(run.top, curve), stroke: color,
-                        "stroke-dasharray": series.dashed ? "6 4" : undefined,
+                        "stroke-dasharray": series.dashed ? "6 4" : this.dashFor(seriesIndex),
                     }))
                 }
             }
@@ -1265,8 +1273,8 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
                     return
                 }
                 const rect = horizontal
-                    ? svgEl("rect", {class: "vtc-chart-bar", x: Math.min(from, to), y: along, width: length, height: across, fill: color, rx: 2})
-                    : svgEl("rect", {class: "vtc-chart-bar", x: along, y: Math.min(from, to), width: across, height: length, fill: color, rx: 2})
+                    ? svgEl("rect", {class: "vtc-chart-bar", x: Math.min(from, to), y: along, width: length, height: across, fill: this.fillFor(bar.i, color), rx: 2})
+                    : svgEl("rect", {class: "vtc-chart-bar", x: along, y: Math.min(from, to), width: across, height: length, fill: this.fillFor(bar.i, color), rx: 2})
                 if (hoverMarks) {
                     // The bar's own span, so the tooltip never lands on the bar it is describing
                     this.addMark(rect, this.#markFor(rowIndex, bar.s, bar.i, horizontal
@@ -1733,6 +1741,113 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         this.#cursorLine?.setAttribute("visibility", "hidden")
     }
 
+    #rowTips(rowIndex: number): TooltipRow[] {
+        const row = (this.#rows as Row[])[rowIndex]
+        const tips: TooltipRow[] = []
+        this.chartAttrs.series.forEach((s, i) => {
+            const value = this.#values[i][rowIndex]
+            if (!Number.isNaN(value) && !this.isEntryHidden(i)) {
+                // Each series' own value, never its stacked running total - "this series contributed
+                // 12" is the fact a reader wants, not "the stack reached 40".
+                tips.push({label: s.label ?? s.key, value: this.#valueText(s, value, row), color: seriesColor(i, s.color)})
+            }
+        })
+        return tips
+    }
+
+    /** The points the arrow keys walk in `"nearest"` mode: series by series, then along the axis */
+    #keyboardPoints(layout: Layout): {series: number, row: number}[] {
+        const points: {series: number, row: number}[] = []
+        this.chartAttrs.series.forEach((_, s) => {
+            for (let i = layout.start; i < layout.end; i++) {
+                if (!Number.isNaN(this.#shownHighs[s][i])) {
+                    points.push({series: s, row: i})
+                }
+            }
+        })
+        return points
+    }
+
+    protected override keyboardCount(): number {
+        const layout = this.#layout
+        if (!layout) {
+            return 0
+        }
+        const mode = this.#hoverMode()
+        if (mode === "index") {
+            return layout.end - layout.start
+        }
+        return mode === "nearest" ? this.#keyboardPoints(layout).length : super.keyboardCount()
+    }
+
+    protected override keyboardShow(index: number): string {
+        const layout = this.#layout as Layout
+        const mode = this.#hoverMode()
+        if (mode === "index") {
+            const rowIndex = layout.start + index
+            const row = (this.#rows as Row[])[rowIndex]
+            const centre = layout.x.scale.map(row.x)
+            this.#showRow(layout, rowIndex, centre, layout.box.top + layout.box.height / 2)
+            this.#broadcastCursor?.(row.x)
+            return [this.#rowTitle(row), ...this.#rowTips(rowIndex).map(tip => `${tip.label} ${tip.value}`.trim())].filter(part => part.length > 0).join(", ")
+        }
+        if (mode === "nearest") {
+            const point = this.#keyboardPoints(layout)[index]
+            const s = this.chartAttrs.series[point.series]
+            const cx = layout.x.scale.map((this.#rows as Row[])[point.row].x)
+            const cy = this.#axisFor(s, layout).scale.map(this.#shownHighs[point.series][point.row])
+            const mark = this.#markFor(point.row, s, point.series, {left: cx, right: cx, y: cy})
+            this.showTooltip(mark.title, mark.rows, mark.anchor)
+            return [mark.title, ...mark.rows.map(tip => `${tip.label} ${tip.value}`.trim())].join(", ")
+        }
+        return super.keyboardShow(index)
+    }
+
+    protected override keyboardDetail(index: number): ChartPointDetail | undefined {
+        const layout = this.#layout as Layout
+        const mode = this.#hoverMode()
+        if (mode === "index") {
+            const row = (this.#rows as Row[])[layout.start + index]
+            return row ? {label: this.#rowTitle(row), index: row.index} : undefined
+        }
+        if (mode === "nearest") {
+            const point = this.#keyboardPoints(layout)[index]
+            return this.#markFor(point.row, this.chartAttrs.series[point.series], point.series, {left: 0, right: 0, y: 0}).detail
+        }
+        return super.keyboardDetail(index)
+    }
+
+    protected override keyboardClear(): void {
+        super.keyboardClear()
+        this.#clearCursor()
+        this.#broadcastCursor?.(undefined)
+    }
+
+    /** `+` and `-` zoom on the middle of the plot, shift and an arrow pans, and `0` goes back to everything */
+    protected override keyboardExtra(event: KeyboardEvent): boolean {
+        const layout = this.#layout
+        if (!layout || !this.#canZoom()) {
+            return false
+        }
+        const {box} = layout
+        const midX = box.left + box.width / 2
+        const midY = box.top + box.height / 2
+        if (event.key === "+" || event.key === "=") {
+            this.#zoomAround(layout, midX, midY, 0.8)
+        } else if (event.key === "-" || event.key === "_") {
+            this.#zoomAround(layout, midX, midY, 1.25)
+        } else if (event.key === "0") {
+            this.#setView(undefined, true)
+        } else if (event.shiftKey && (event.key === "ArrowLeft" || event.key === "ArrowRight") && this.#view) {
+            const step = (event.key === "ArrowLeft" ? -1 : 1) * box.width * 0.1
+            const [xMin, xMax] = this.#clampX(layout.x.scale.invert(box.left + step), layout.x.scale.invert(box.left + box.width + step))
+            this.#setView({...this.#view, xMin, xMax}, true)
+        } else {
+            return false
+        }
+        return true
+    }
+
     #showRow(layout: Layout, rowIndex: number, x: number, y: number): void {
         const rows = this.#rows as Row[]
         const row = rows[rowIndex]
@@ -1748,15 +1863,7 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
             this.#cursorLine?.setAttribute("x1", String(centre))
             this.#cursorLine?.setAttribute("x2", String(centre))
         }
-        const tips: TooltipRow[] = []
-        this.chartAttrs.series.forEach((s, i) => {
-            const value = this.#values[i][rowIndex]
-            if (!Number.isNaN(value) && !this.isEntryHidden(i)) {
-                // Each series' own value, never its stacked running total - "this series contributed
-                // 12" is the fact a reader wants, not "the stack reached 40".
-                tips.push({label: s.label ?? s.key, value: this.#valueText(s, value, row), color: seriesColor(i, s.color)})
-            }
-        })
+        const tips = this.#rowTips(rowIndex)
         // Anchored on the pointer, not on the centre: that keeps the offset constant as the cursor
         // moves. The span to clear is everything between the cursor and the marker line, which can
         // sit either side of the pointer, and covering it hides which row is selected.

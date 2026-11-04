@@ -91,21 +91,21 @@ export class Treemap extends ChartFrame<TreemapAttrsType> {
         const marks = svgEl("g", {class: "vtc-chart-marks-radial"})
         const labels: SVGElement[] = []
         let order = 0
-        const lay = (nodes: TreeNodeType[], area: Rect, inherited: string | undefined, path: string[]) => {
+        const lay = (nodes: TreeNodeType[], area: Rect, inherited: string | undefined, path: string[], slotOf: number) => {
             const items = nodes.map((node, i) => {
                 const hidden = path.length === 0 && this.isEntryHidden(i)
                 return {
-                    item: {node, color: node.color ?? inherited ?? seriesColor(i)},
+                    item: {node, color: node.color ?? inherited ?? seriesColor(i), slot: path.length === 0 ? i : slotOf},
                     value: hidden ? 0 : nodeTotal(node),
                 }
             })
             for (const {item, rect} of squarify(items, area)) {
                 const {node, color} = item
                 if (node.children && node.children.length > 0) {
-                    lay(node.children, {x: rect.x + 1, y: rect.y + 1, width: rect.width - 2, height: rect.height - 2}, color, [...path, node.label])
+                    lay(node.children, {x: rect.x + 1, y: rect.y + 1, width: rect.width - 2, height: rect.height - 2}, color, [...path, node.label], item.slot)
                     continue
                 }
-                const shape = svgEl("rect", {class: "vtc-chart-cell", ...rect, fill: color})
+                const shape = svgEl("rect", {class: "vtc-chart-cell", ...rect, fill: item.slot >= 0 ? this.fillFor(item.slot, color) : color})
                 const value = nodeTotal(node)
                 const title = [...path, node.label].join(" / ")
                 this.addMark(shape, {
@@ -122,7 +122,7 @@ export class Treemap extends ChartFrame<TreemapAttrsType> {
                 }
             }
         }
-        lay(this.chartAttrs.data, {x: 0, y: 0, width, height}, undefined, [])
+        lay(this.chartAttrs.data, {x: 0, y: 0, width, height}, undefined, [], -1)
         svg.appendChild(marks)
         for (const text of labels) {
             svg.appendChild(text)

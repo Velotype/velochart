@@ -49,6 +49,12 @@ const streaming = expose("streaming", getComponent<LineChart>(<LineChart data={[
 const syncedA = expose("syncedA", getComponent<LineChart>(<LineChart data={ten} series={[{key: "v"}]} zoom="x" syncGroup="zooming" height={100}/>))
 const syncedB = expose("syncedB", getComponent<LineChart>(<LineChart data={ten} series={[{key: "v"}]} zoom="x" syncGroup="zooming" height={100}/>))
 
+const exporting = expose("exporting", getComponent<LineChart>(<LineChart title="To export" data={[
+    {label: "=SUM(A1)", values: {a: 1, b: -2}},
+    {label: 'He said "hi", ok', values: {a: 3}},
+]} series={[{key: "a", label: "A"}, {key: "b", label: "B"}]} height={140}/>))
+const canvasExporting = expose("canvasExporting", getComponent<LineChart>(<LineChart renderer="canvas" data={ten} series={[{key: "v"}]} height={100}/>))
+
 const updating = getComponent<BarChart>(<BarChart data={[{label: "a", values: {v: 1}}]} series={[{key: "v"}]} height={120}/>)
 ;(globalThis as unknown as {updatingChart: BarChart}).updatingChart = updating
 
@@ -109,6 +115,16 @@ class FeaturesPage extends Component<EmptyAttrs> {
             <div id="stream-chart">{streaming}</div>
             <div id="synced-a">{syncedA}</div>
             <div id="synced-b">{syncedB}</div>
+            <div id="keyboard-line"><LineChart ariaLabel="Keys on a line" data={months} series={[{key: "sales", label: "Sales"}]} zoom="x" height={140} onPointClick={(detail) => {
+                (globalThis as unknown as {lastKeyClick: unknown}).lastKeyClick = detail
+            }}/></div>
+            <div id="keyboard-bars"><BarChart data={negatives} series={[{key: "v", label: "V"}]} height={120}/></div>
+            <div id="keyboard-pie"><PieChart ariaLabel="Keys on a pie" data={[{label: "x", value: 1}, {label: "y", value: 3}]} height={120}/></div>
+            <div id="keyboard-off"><LineChart keyboard={false} data={months} series={[{key: "sales"}]} height={100}/></div>
+            <div id="patterned-bars"><BarChart patterns data={months} series={[{key: "sales"}, {key: "rate"}]} height={140}/></div>
+            <div id="patterned-lines"><LineChart patterns data={months} series={[{key: "sales"}, {key: "rate"}]} height={140}/></div>
+            <div id="export-chart">{exporting}</div>
+            <div id="export-canvas">{canvasExporting}</div>
             <div id="titled-chart"><LineChart title="With a title" data={gaps} series={gapSeries} height={160}/></div>
         </div>
     }

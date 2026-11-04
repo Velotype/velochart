@@ -81,6 +81,12 @@ export class Gauge extends ChartFrame<GaugeAttrsType> {
         return undefined
     }
 
+    /** A gauge reads aloud through its label, and still has a number to export */
+    protected override exportTable(): ChartDataTable {
+        const {ariaLabel, title, label, value} = this.chartAttrs
+        return {columns: ["", ""], rows: [[ariaLabel ?? title ?? label ?? "", this.format(value)]]}
+    }
+
     protected override draw(svg: SVGElement, width: number, height: number): void {
         const attrs = this.chartAttrs
         const min = attrs.min ?? 0

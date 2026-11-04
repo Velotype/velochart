@@ -54,7 +54,7 @@ export class PolarAreaChart extends ChartFrame<PolarAreaChartAttrsType> {
             }
             const reach = radius * (Math.max(0, slice.value) / top)
             const color = seriesColor(index, slice.color)
-            const path = svgEl("path", {class: "vtc-chart-arc", d: arcPath(cx, cy, Math.max(0.5, reach), 0, angle, angle + sweep), fill: color})
+            const path = svgEl("path", {class: "vtc-chart-arc", d: arcPath(cx, cy, Math.max(0.5, reach), 0, angle, angle + sweep), fill: this.fillFor(index, color)})
             const middle = angle + sweep / 2
             const tipX = cx + Math.cos(middle) * reach * 0.6
             this.addMark(path, {

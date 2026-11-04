@@ -43,7 +43,10 @@ export const ChartThemeOptions: {
     seriesColors: string[]
     /** Shown in place of a chart with no data (default: the U+2205 glyph) */
     emptySymbol: FunctionComponent<EmptyAttrs>
+    /** Every chart fills with patterns as well as color, unless its own `patterns` says otherwise (default: `false`) */
+    patterns: boolean
 } = {
+    patterns: false,
     seriesColors: [
         "var(--primary)",
         "var(--secondary)",
@@ -207,6 +210,10 @@ export type ChartBaseAttrsType = {
     animate?: boolean
     /** Lets a reader hide and show entries by clicking the legend (default: `true`) */
     legendToggle?: boolean
+    /** Fills series with patterns and dashes as well as color, for readers who can't tell the hues apart (default: `ChartThemeOptions.patterns`) */
+    patterns?: boolean
+    /** Lets a keyboard reader move through the marks with the arrow keys (default: `true`) */
+    keyboard?: boolean
     /** Called when a reader activates a point, slice, cell or node */
     onPointClick?: (detail: ChartPointDetail) => void
 }
@@ -244,6 +251,7 @@ export function mountChartStyles(): void {
 `
 .vtc-chart{width:100%;box-sizing:border-box;display:flex;flex-direction:column;gap:0.5em;position:relative;}
 .vtc-chart-drawing{position:relative;}
+.vtc-chart-drawing:focus-visible{outline:2px solid var(--primary-7);outline-offset:2px;border-radius:0.25rem;}
 .vtc-chart-svg{display:block;width:100%;overflow:visible;}
 ` +
 /* Visually hidden, still read aloud - the standard clip pattern. This holds each chart's data as a
@@ -413,7 +421,8 @@ transition:opacity 0.1s ease-out;
 /** Builds the legend row; returns undefined when there is nothing worth labelling */
 export function buildLegend(
     entries: {label: string, color: string}[],
-    onToggle: ((index: number) => void) | undefined
+    onToggle: ((index: number) => void) | undefined,
+    swatchBackground?: (slot: number) => string
 ): HTMLDivElement | undefined {
     if (entries.length === 0) {
         return undefined
@@ -432,6 +441,10 @@ export function buildLegend(
         const swatch = document.createElement("span")
         swatch.className = "vtc-chart-legend-swatch"
         swatch.style.backgroundColor = entry.color
+        if (swatchBackground) {
+            swatch.style.backgroundImage = swatchBackground(index)
+            swatch.style.backgroundSize = "6px 6px"
+        }
         const text = document.createElement("span")
         text.textContent = entry.label
         item.appendChild(swatch)

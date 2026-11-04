@@ -978,4 +978,164 @@ describe('chart rendering', () => {
         }
     })
 
+
+    itWrap("the arrow keys walk a line chart, read each point aloud, and Enter activates it", "features", "#keyboard-line", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const root = document.getElementById("keyboard-line") as HTMLElement
+            const host = root.querySelector(".vtc-chart-drawing") as HTMLElement
+            const press = (key: string) => {
+                const event = new KeyboardEvent("keydown", {key, bubbles: true, cancelable: true})
+                host.dispatchEvent(event)
+                return event.defaultPrevented
+            }
+            const live = () => root.querySelector("[aria-live]")!.textContent
+            const tip = root.querySelector(".vtc-chart-tooltip") as HTMLElement
+            host.focus()
+            const tabPrevented = press("Tab")
+            press("ArrowRight")
+            const first = live()
+            press("ArrowRight")
+            const second = live()
+            press("End")
+            const last = live()
+            press("Enter")
+            const shownBefore = tip.classList.contains("vtc-chart-tooltip-visible")
+            press("Escape")
+            return {
+                role: host.getAttribute("role"), name: host.getAttribute("aria-label"), tab: host.tabIndex, tabPrevented,
+                first, second, last, shownBefore,
+                shownAfter: tip.classList.contains("vtc-chart-tooltip-visible"),
+                cleared: live(),
+                detail: (globalThis as unknown as {lastKeyClick: unknown}).lastKeyClick,
+            }
+        })
+        assertEquals(state.role, "group")
+        assertEquals(state.name, "Keys on a line")
+        assertEquals(state.tab, 0)
+        // A chart must never become a keyboard trap
+        assertEquals(state.tabPrevented, false)
+        assertEquals(state.first, "Jan, Sales 120")
+        assertEquals(state.second, "Feb, Sales 150")
+        assertEquals(state.last, "Apr, Sales 200")
+        assertEquals(state.shownBefore, true)
+        assertEquals(state.shownAfter, false)
+        assertEquals(state.cleared, "")
+        assertEquals(state.detail, {label: "Apr", index: 3})
+    })
+
+    itWrap("the keyboard walks bars and slices through their marks", "features", "#keyboard-bars", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const walk = (id: string) => {
+                const root = document.getElementById(id) as HTMLElement
+                const host = root.querySelector(".vtc-chart-drawing") as HTMLElement
+                host.dispatchEvent(new KeyboardEvent("keydown", {key: "ArrowRight", bubbles: true}))
+                host.dispatchEvent(new KeyboardEvent("keydown", {key: "ArrowRight", bubbles: true}))
+                return {said: root.querySelector("[aria-live]")!.textContent, active: root.querySelectorAll(".vtc-chart-mark-active").length}
+            }
+            const off = document.querySelector("#keyboard-off .vtc-chart-drawing") as HTMLElement
+            return {bars: walk("keyboard-bars"), pie: walk("keyboard-pie"), off: off.hasAttribute("tabindex")}
+        })
+        assertEquals(state.bars, {said: "down, V -5", active: 1})
+        assertEquals(state.pie, {said: "y 3 (75.0%)", active: 1})
+        assertEquals(state.off, false)
+    })
+
+    itWrap("plus and minus zoom from the keyboard, and shift and an arrow pans", "features", "#keyboard-line", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const host = document.querySelector("#keyboard-line .vtc-chart-drawing") as HTMLElement
+            host.dispatchEvent(new KeyboardEvent("keydown", {key: "+", bubbles: true}))
+            return {zoomed: host.querySelector("svg") !== null}
+        })
+        assertEquals(state.zoomed, true)
+        await settle()
+        const ticks = await page.evaluate(() => {
+            const host = document.querySelector("#keyboard-line .vtc-chart-drawing") as HTMLElement
+            const clipped = host.querySelector("g.vtc-chart-plot")!.hasAttribute("clip-path")
+            host.dispatchEvent(new KeyboardEvent("keydown", {key: "0", bubbles: true}))
+            return clipped
+        })
+        assertEquals(ticks, true)
+        await settle()
+        const reset = await page.evaluate(() => document.querySelector("#keyboard-line g.vtc-chart-plot")!.hasAttribute("clip-path"))
+        assertEquals(reset, false)
+    })
+
+    itWrap("patterns tell series apart without color, in bars, lines and the legend", "features", "#patterned-bars", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const bars = document.getElementById("patterned-bars") as HTMLElement
+            const lines = document.getElementById("patterned-lines") as HTMLElement
+            const fills = new Set(Array.from(bars.querySelectorAll("rect.vtc-chart-bar")).map(b => b.getAttribute("fill")))
+            return {
+                fills: [...fills],
+                defined: [...fills].every(fill => bars.querySelector((fill as string).slice(4, -1)) !== null),
+                swatch: (bars.querySelector(".vtc-chart-legend-swatch") as HTMLElement).style.backgroundImage.includes("gradient"),
+                dashes: Array.from(lines.querySelectorAll("path.vtc-chart-line")).map(l => l.getAttribute("stroke-dasharray")),
+                plain: document.querySelector("#negative-bars rect.vtc-chart-bar")!.getAttribute("fill"),
+            }
+        })
+        assertEquals(state.fills.length, 2)
+        if (!state.fills.every(fill => fill?.startsWith("url(#"))) {fail(`ERROR: expected pattern fills, got ${state.fills}`)}
+        assertEquals(state.defined, true)
+        assertEquals(state.swatch, true)
+        assertEquals(state.dashes[0], null)
+        assertEquals(state.dashes[1], "8 4")
+        if (state.plain?.startsWith("url(")) {fail("ERROR: patterns are opt-in")}
+    })
+
+    itWrap("toCsv quotes properly, keeps gaps empty and defuses a formula", "features", "#export-chart", async (_selection: ElementHandle) => {
+        const csv = await page.evaluate(() => (globalThis as unknown as {exporting: {toCsv: () => string}}).exporting.toCsv())
+        assertEquals(csv, `,A,B\r\n'=SUM(A1),1,-2\r\n"He said ""hi"", ok",3,`)
+    })
+
+    itWrap("toSvgString stands alone: titled, with a legend, resolved colors and no page classes", "features", "#export-chart", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const markup = (globalThis as unknown as {exporting: {toSvgString: () => string}}).exporting.toSvgString()
+            const parsed = new DOMParser().parseFromString(markup, "image/svg+xml")
+            return {
+                error: parsed.querySelector("parsererror") !== null,
+                hasVar: markup.includes("var(--"),
+                hasClass: markup.includes("class="),
+                hasHit: markup.includes("vtc-chart-hit"),
+                texts: Array.from(parsed.querySelectorAll("text")).map(t => t.textContent),
+                paths: parsed.querySelectorAll("path").length,
+                ns: parsed.documentElement.getAttribute("xmlns"),
+            }
+        })
+        assertEquals(state.error, false)
+        assertEquals(state.hasVar, false)
+        assertEquals(state.hasClass, false)
+        assertEquals(state.hasHit, false)
+        assertEquals(state.ns, "http://www.w3.org/2000/svg")
+        if (!state.texts.includes("To export") || !state.texts.includes("A")) {fail(`ERROR: expected the title and legend, got ${state.texts}`)}
+        if (state.paths < 1) {fail("ERROR: expected the line in the export")}
+    })
+
+    itWrap("toPngBlob makes a real PNG, from a canvas chart too", "features", "#export-canvas", async (_selection: ElementHandle) => {
+        await page.evaluate(() => {
+            const global = globalThis as unknown as Record<string, unknown> & {
+                exporting: {toPngBlob: () => Promise<Blob>}, canvasExporting: {toPngBlob: () => Promise<Blob>, toSvgString: () => string}
+            }
+            const signature = async (blob: Blob) => ({type: blob.type, size: blob.size, head: Array.from(new Uint8Array(await blob.arrayBuffer()).slice(1, 4))})
+            global.pngDone = false
+            Promise.all([global.exporting.toPngBlob(), global.canvasExporting.toPngBlob()]).then(async ([plain, canvas]) => {
+                global.pngResult = {plain: await signature(plain), canvas: await signature(canvas), image: global.canvasExporting.toSvgString().includes("<image")}
+                global.pngDone = true
+            }).catch(error => {
+                global.pngResult = String(error)
+                global.pngDone = true
+            })
+        })
+        for (let i = 0; i < 40; i++) {
+            if (await page.evaluate(() => (globalThis as unknown as {pngDone: boolean}).pngDone)) {break}
+            await settle()
+        }
+        const result = await page.evaluate(() => (globalThis as unknown as {pngResult: {plain: {type: string, size: number, head: number[]}, canvas: {type: string, size: number, head: number[]}, image: boolean}}).pngResult)
+        assertEquals(result.plain.type, "image/png")
+        // "PNG", straight after the signature's first byte
+        assertEquals(result.plain.head, [80, 78, 71])
+        assertEquals(result.canvas.head, [80, 78, 71])
+        assertEquals(result.image, true)
+        if (result.plain.size < 500) {fail(`ERROR: a blank image is suspiciously small: ${result.plain.size}`)}
+    })
+
 })

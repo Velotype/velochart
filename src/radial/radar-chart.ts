@@ -111,7 +111,7 @@ export class RadarChart extends ChartFrame<RadarChartAttrsType> {
             if (fill ?? true) {
                 marks.appendChild(svgEl("path", {class: "vtc-chart-area", d, fill: color}))
             }
-            marks.appendChild(svgEl("path", {class: "vtc-chart-line", d, stroke: color}))
+            marks.appendChild(svgEl("path", {class: "vtc-chart-line", d, stroke: color, "stroke-dasharray": this.dashFor(seriesIndex)}))
             for (const corner of corners) {
                 marks.appendChild(svgEl("circle", {class: "vtc-chart-dot", cx: corner.x, cy: corner.y, r: 3, fill: color}))
             }

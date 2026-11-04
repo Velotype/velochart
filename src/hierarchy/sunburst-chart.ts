@@ -60,7 +60,7 @@ export class SunburstChart extends ChartFrame<SunburstChartAttrsType> {
                 // Each ring out is a little lighter than its parent, so the levels read apart
                 const fill = depth === 0 ? color : `color-mix(in srgb, ${color} ${Math.max(45, 100 - depth * 18)}%, var(--background))`
                 const from = inner + ring * depth
-                const path_ = svgEl("path", {class: "vtc-chart-arc", d: arcPath(cx, cy, from + ring, from, angle, angle + share), fill})
+                const path_ = svgEl("path", {class: "vtc-chart-arc", d: arcPath(cx, cy, from + ring, from, angle, angle + share), fill: depth === 0 ? this.fillFor(i, fill) : fill})
                 const middle = angle + share / 2
                 const reach = from + ring / 2
                 const tipX = cx + Math.cos(middle) * reach
