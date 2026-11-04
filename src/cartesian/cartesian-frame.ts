@@ -875,7 +875,14 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         }
         const target = count ?? Math.max(2, Math.floor(length / 90))
         if (this.#xKind === "time") {
-            const {ticks, format} = timeTicks(scale.min, scale.max, target, definition.utc ?? false)
+            const utc = definition.utc ?? false
+            const first = timeTicks(scale.min, scale.max, target, utc)
+            const label = definition.format ?? first.format
+            // Spaced for an ordinary label. Times down to the millisecond are longer, so they take fewer ticks
+            const room = Math.max(...first.ticks.map(tick => label(tick).length), 0) * GLYPH + 16
+            const {ticks, format} = first.ticks.length * room > length && count === undefined
+                ? timeTicks(scale.min, scale.max, Math.max(1, Math.floor(length / room)), utc)
+                : first
             return {scale, ticks, format: definition.format ?? format, definition}
         }
         const format = definition.format ?? ((value: number) => this.format(value))

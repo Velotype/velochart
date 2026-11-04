@@ -105,7 +105,7 @@ const DAY = 24 * HOUR
 
 /** The spacings a time axis may use. Months and years come out of the calendar rather than a duration */
 const TIME_STEPS: {unit: "ms" | "day" | "month", step: number, size: number}[] = [
-    ...[1, 2, 5, 10, 20, 50, 100, 200, 500].map(step => ({unit: "ms" as const, step, size: step})),
+    ...[1, 2, 5, 10, 25, 50, 100, 250, 500].map(step => ({unit: "ms" as const, step, size: step})),
     {unit: "ms", step: SECOND, size: SECOND},
     {unit: "ms", step: 5 * SECOND, size: 5 * SECOND},
     {unit: "ms", step: 15 * SECOND, size: 15 * SECOND},

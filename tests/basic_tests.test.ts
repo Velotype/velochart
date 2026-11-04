@@ -398,10 +398,14 @@ describe('chart rendering', () => {
             const r = svg.getBoundingClientRect()
             svg.querySelector(".vtc-chart-hit")!.dispatchEvent(new PointerEvent("pointermove", {bubbles: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2}))
             const inside = Array.from(svg.querySelectorAll("text")).every(text => text.getBoundingClientRect().right <= r.right + 1 && text.getBoundingClientRect().left >= r.left - 1)
-            return {ticks, inside, title: document.querySelector("#tw-fine .vtc-chart-tooltip-title")?.textContent ?? ""}
+            const narrow = document.querySelector("#tw-narrow-fine svg") as SVGElement
+            const boxes = Array.from(narrow.querySelectorAll("text")).filter(text => /:/.test(text.textContent ?? "")).map(text => text.getBoundingClientRect()).sort((a, b) => a.left - b.left)
+            const apart = boxes.every((box, i) => i === 0 || box.left >= boxes[i - 1].right)
+            return {ticks, inside, apart, title: document.querySelector("#tw-fine .vtc-chart-tooltip-title")?.textContent ?? ""}
         })
         assertEquals(state.ticks.length > 1, true)
         assertEquals(state.inside, true)
+        assertEquals(state.apart, true)
         // Spaced under a second, they would read as one time over and over without their milliseconds
         assertEquals(new Set(state.ticks).size, state.ticks.length)
         assertEquals(/\.\d{3}/.test(state.title), true)

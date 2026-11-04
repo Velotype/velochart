@@ -56,6 +56,7 @@ live.subscribe(() => moved.count++)
 const fineWindow = expose("fineWindow", new TimeWindow({range: {from: start + 1123, to: start + 1623}, now: () => clock.now}))
 const finePoints = Array.from({length: 60}, (_, i) => ({x: start + i * 100 + 7, values: {v: i % 7}}))
 const fine = expose("fine", getComponent<LineChart>(<LineChart data={finePoints} series={[{key: "v"}]} timeWindow={fineWindow} xAxis={{type: "time", utc: true}} height={120}/>))
+const narrowFine = getComponent<LineChart>(<LineChart data={finePoints} series={[{key: "v"}]} timeWindow={fineWindow} xAxis={{type: "time", utc: true}} height={120}/>)
 const alwaysWindow = new TimeWindow({range: {from: start, to: start + 6 * HOUR}, now: () => clock.now})
 
 const labelled = expose("labelled", new TimeWindow({span: HOUR, now: () => clock.now}))
@@ -71,7 +72,8 @@ class TimeWindowModule extends Component<EmptyAttrs> {
             <div id="tw-categories">{categories}</div>
             <div id="tw-gauge">{gauge}</div>
             <div id="tw-from-empty">{fromEmpty}</div>
-            <div id="tw-fine">{fine}</div>
+            <div id="tw-fine" style={{width: "340px"}}>{fine}</div>
+            <div id="tw-narrow-fine" style={{width: "240px"}}>{narrowFine}</div>
             <div id="tw-fine-control"><TimeWindowControl timeWindow={fineWindow} utc/></div>
             <div id="tw-always"><TimeWindowControl timeWindow={alwaysWindow} utc precision="millisecond"/></div>
             <div id="tw-control"><TimeWindowControl timeWindow={shared} utc/></div>
