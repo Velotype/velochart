@@ -1,13 +1,15 @@
 import { ChartFrame } from "../core/chart-frame.ts"
 import { seriesColor, svgEl } from "../core/chart-common.ts"
 import type {
-    ChartAxisType, ChartBaseAttrsType, ChartCurve, ChartDataTable, ChartPointDetail, ChartPointType,
+    ChartAnnotationType, ChartAxisType, ChartBaseAttrsType, ChartCurve, ChartDataTable, ChartPointDetail, ChartPointType,
     ChartSeriesKind, ChartSeriesType, PlotBox, TooltipRow
 } from "../core/chart-common.ts"
 import {
     fullTimeFormat, linearScale, logDomain, logScale, logTicks, niceTicks, ticksWithin, timeTicks
 } from "../core/scale.ts"
 import type { Scale, ScaleKind } from "../core/scale.ts"
+import { joinCursorGroup } from "./cursor-sync.ts"
+import { errorRange, linearFit, movingAverage } from "./statistics.ts"
 import { areaPath, linePath } from "./line-path.ts"
 import type { PathPoint } from "./line-path.ts"
 import type { IdAttr, StylePassthroughAttrs } from "../core/velotype.ts"
@@ -46,6 +48,14 @@ export type CartesianAttrsType = {
      * the pointer.
      */
     hover?: "index" | "mark" | "nearest" | "none"
+    /** Lines, bands and labelled points drawn on the plot */
+    annotations?: ChartAnnotationType[]
+    /** Writes each value beside its mark. Thinned when there is not room for them all (default: `false`) */
+    showValues?: boolean
+    /** Follows the pointer with lines to the axes and reads their values off there (default: `false`) */
+    crosshair?: boolean
+    /** Charts sharing this name move their hover cursors together, and zoom together */
+    syncGroup?: string
 } & ChartBaseAttrsType & IdAttr & StylePassthroughAttrs
 
 type Row = {x: number, point: ChartPointType, index: number}
@@ -99,6 +109,27 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
     #cursorRow = -1
     #cursorLine: SVGElement | undefined
     #listening = false
+    #crosshair: {horizontal: SVGElement, vertical: SVGElement, yBadge: SVGElement, yText: SVGElement, xBadge: SVGElement, xText: SVGElement} | undefined
+    #leaveCursorGroup: (() => void) | undefined
+    /** Tells the rest of the group where the cursor went, or that it left */
+    #broadcastCursor: ((x: number | undefined) => void) | undefined
+
+    override mount() {
+        super.mount()
+        const group = this.chartAttrs.syncGroup
+        if (group !== undefined) {
+            const member = joinCursorGroup(group, (x) => this.#showSyncedCursor(x))
+            this.#broadcastCursor = member.broadcast
+            this.#leaveCursorGroup = member.leave
+        }
+    }
+
+    override unmount() {
+        super.unmount()
+        this.#leaveCursorGroup?.()
+        this.#leaveCursorGroup = undefined
+        this.#broadcastCursor = undefined
+    }
 
     /** How a series with no `type` of its own is drawn */
     protected abstract defaultSeriesKind(): ChartSeriesKind
@@ -269,7 +300,10 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         this.#cursorRow = -1
         this.#cursorLine = undefined
         this.#drawAxes(svg, layout)
+        this.#drawBands(svg, layout)
         this.#drawMarks(svg, layout)
+        this.#drawExtras(svg, layout)
+        this.#drawAnnotations(svg, layout)
         this.#attachHover(svg, layout)
     }
 
@@ -325,12 +359,32 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
             }
             const highs = this.#highs[s]
             const lows = this.#lows[s]
+            const rows = this.#rows as Row[]
+            const key = series[s].key
             for (let i = start; i < end; i++) {
                 if (!Number.isNaN(highs[i])) {
                     see(highs[i])
                     if (stacked) {
                         see(lows[i])
                     }
+                    const error = errorRange(rows[i].point.errors?.[key])
+                    if (error) {
+                        see(highs[i] - error[0])
+                        see(highs[i] + error[1])
+                    }
+                }
+            }
+        }
+        // An annotation has to be in view to mean anything, and a threshold is often above the data
+        for (const annotation of this.chartAttrs.annotations ?? []) {
+            if (annotation.type === "point" && side === "left") {
+                see(annotation.y)
+            } else if (annotation.type !== "point" && (annotation.axis ?? "y") === (side === "left" ? "y" : "y2")) {
+                if (annotation.type === "line") {
+                    see(Number(annotation.value))
+                } else {
+                    see(Number(annotation.from))
+                    see(Number(annotation.to))
                 }
             }
         }
@@ -659,6 +713,187 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         }
     }
 
+    /** A position on the x axis as given to an annotation: a value, a date, or a category's label */
+    #annotationX(value: number | Date | string): number {
+        if (typeof value === "string") {
+            return (this.#rows as Row[]).findIndex(row => row.point.label === value)
+        }
+        return Number(value)
+    }
+
+    #annotationScale(layout: Layout, axis: "x" | "y" | "y2" | undefined): Scale {
+        if (axis === "x") {
+            return layout.x.scale
+        }
+        return axis === "y2" && layout.yRight ? layout.yRight.scale : layout.yLeft.scale
+    }
+
+    #annotationValue(axis: "x" | "y" | "y2" | undefined, value: number | Date | string): number {
+        return axis === "x" ? this.#annotationX(value) : Number(value)
+    }
+
+    /** Under the marks, so a shaded range never dulls the data it is about */
+    #drawBands(svg: SVGElement, layout: Layout): void {
+        const {box} = layout
+        const horizontal = this.chartAttrs.horizontal ?? false
+        for (const annotation of this.chartAttrs.annotations ?? []) {
+            if (annotation.type !== "band") {
+                continue
+            }
+            const scale = this.#annotationScale(layout, annotation.axis)
+            const from = scale.map(this.#annotationValue(annotation.axis, annotation.from))
+            const to = scale.map(this.#annotationValue(annotation.axis, annotation.to))
+            const acrossWidth = (annotation.axis === "x") !== horizontal
+            const rect = acrossWidth
+                ? {x: Math.min(from, to), y: box.top, width: Math.abs(to - from), height: box.height}
+                : {x: box.left, y: Math.min(from, to), width: box.width, height: Math.abs(to - from)}
+            svg.appendChild(svgEl("rect", {class: "vtc-chart-annotation-band", ...rect, fill: annotation.color, style: annotation.color ? `fill:${annotation.color}` : undefined}))
+            if (annotation.label) {
+                this.#annotationLabel(svg, annotation.label, rect.x + 4, rect.y + 12)
+            }
+        }
+    }
+
+    #annotationLabel(svg: SVGElement, text: string, x: number, y: number): void {
+        const label = svgEl("text", {class: "vtc-chart-annotation-label", x, y})
+        label.textContent = text
+        svg.appendChild(label)
+    }
+
+    #drawAnnotations(svg: SVGElement, layout: Layout): void {
+        const {box} = layout
+        const horizontal = this.chartAttrs.horizontal ?? false
+        for (const annotation of this.chartAttrs.annotations ?? []) {
+            if (annotation.type === "line") {
+                const position = this.#annotationScale(layout, annotation.axis).map(this.#annotationValue(annotation.axis, annotation.value))
+                const style = annotation.color ? `stroke:${annotation.color}` : undefined
+                const dash = annotation.dashed ? "6 4" : undefined
+                if ((annotation.axis === "x") !== horizontal) {
+                    svg.appendChild(svgEl("line", {class: "vtc-chart-annotation-line", x1: position, y1: box.top, x2: position, y2: box.top + box.height, style, "stroke-dasharray": dash}))
+                    if (annotation.label) {
+                        this.#annotationLabel(svg, annotation.label, position + 4, box.top + 12)
+                    }
+                } else {
+                    svg.appendChild(svgEl("line", {class: "vtc-chart-annotation-line", x1: box.left, y1: position, x2: box.left + box.width, y2: position, style, "stroke-dasharray": dash}))
+                    if (annotation.label) {
+                        this.#annotationLabel(svg, annotation.label, box.left + 4, position - 4)
+                    }
+                }
+            } else if (annotation.type === "point") {
+                const cx = layout.x.scale.map(this.#annotationX(annotation.x))
+                const cy = layout.yLeft.scale.map(annotation.y)
+                svg.appendChild(svgEl("circle", {class: "vtc-chart-annotation-point", cx, cy, r: 5, style: annotation.color ? `fill:${annotation.color}` : undefined}))
+                if (annotation.label) {
+                    this.#annotationLabel(svg, annotation.label, cx + 8, cy - 8)
+                }
+            }
+        }
+    }
+
+    /** Error bars, trend lines and value labels: everything that sits on top of a series' marks */
+    #drawExtras(svg: SVGElement, layout: Layout): void {
+        const attrs = this.chartAttrs
+        const rows = this.#rows as Row[]
+        const horizontal = attrs.horizontal ?? false
+        const bars = attrs.series.filter((s, i) => this.seriesKind(s) === "bar" && !this.isEntryHidden(i))
+        const group = Math.max(1, layout.slot * (1 - CATEGORY_PADDING))
+        const thickness = attrs.stacked ? group : group / Math.max(1, bars.length)
+        // One label every n rows, when a label wider than its slot would run into the next
+        const inView = Math.max(1, layout.end - layout.start)
+        const perRow = (horizontal ? layout.box.height : layout.box.width) / inView
+        attrs.series.forEach((s, seriesIndex) => {
+            if (this.isEntryHidden(seriesIndex)) {
+                return
+            }
+            const axis = this.#axisFor(s, layout)
+            const color = seriesColor(seriesIndex, s.color)
+            const barIndex = bars.indexOf(s)
+            const along = (row: number) => {
+                const centre = layout.x.scale.map(rows[row].x)
+                return barIndex >= 0 && !attrs.stacked ? centre - group / 2 + thickness * (barIndex + 0.5) : centre
+            }
+            const place = (a: number, v: number) => horizontal ? {x: v, y: a} : {x: a, y: v}
+            for (let i = layout.start; i < layout.end; i++) {
+                const error = errorRange(rows[i].point.errors?.[s.key])
+                const high = this.#shownHighs[seriesIndex][i]
+                if (!error || Number.isNaN(high)) {
+                    continue
+                }
+                const a = along(i)
+                const from = place(a, axis.scale.map(high - error[0]))
+                const to = place(a, axis.scale.map(high + error[1]))
+                const cap = Math.min(5, thickness / 3)
+                const caps = horizontal
+                    ? `M ${from.x} ${a - cap} V ${a + cap} M ${to.x} ${a - cap} V ${a + cap}`
+                    : `M ${a - cap} ${from.y} H ${a + cap} M ${a - cap} ${to.y} H ${a + cap}`
+                svg.appendChild(svgEl("path", {class: "vtc-chart-error", d: `M ${from.x} ${from.y} L ${to.x} ${to.y} ${caps}`, stroke: `color-mix(in srgb, ${color} 75%, var(--text))`}))
+            }
+            this.#drawTrend(svg, layout, s, seriesIndex, axis, color)
+            if (attrs.showValues || s.showValues) {
+                const format = this.#formatFor(s)
+                let widest = 0
+                for (let i = layout.start; i < layout.end; i++) {
+                    const value = this.#values[seriesIndex][i]
+                    if (!Number.isNaN(value)) {
+                        widest = Math.max(widest, format(value).length)
+                    }
+                }
+                const stride = horizontal ? Math.max(1, Math.ceil(14 / Math.max(1, perRow))) : Math.max(1, Math.ceil((widest * GLYPH + 4) / Math.max(1, perRow)))
+                for (let i = layout.start; i < layout.end; i += stride) {
+                    const value = this.#values[seriesIndex][i]
+                    const high = this.#shownHighs[seriesIndex][i]
+                    if (Number.isNaN(value) || Number.isNaN(high)) {
+                        continue
+                    }
+                    const position = axis.scale.map(high)
+                    const a = along(i)
+                    // A stacked segment's value sits in its middle, since the end of it is the next segment
+                    const middle = attrs.stacked ? axis.scale.map((high + this.#shownLows[seriesIndex][i]) / 2) : position
+                    const offset = attrs.stacked ? 0 : (value >= 0 ? -6 : 6)
+                    const label = svgEl("text", horizontal
+                        ? {class: "vtc-chart-value-label", x: middle - offset * 2, y: a, "dominant-baseline": "middle", "text-anchor": attrs.stacked ? "middle" : value >= 0 ? "start" : "end"}
+                        : {class: "vtc-chart-value-label", x: a, y: middle + offset, "dominant-baseline": attrs.stacked ? "middle" : value >= 0 ? "auto" : "hanging"})
+                    label.textContent = format(value)
+                    svg.appendChild(label)
+                }
+            }
+        })
+    }
+
+    #drawTrend(svg: SVGElement, layout: Layout, series: ChartSeriesType, seriesIndex: number, axis: Axis, color: string): void {
+        if (!series.trendline) {
+            return
+        }
+        const rows = this.#rows as Row[]
+        const xs: number[] = []
+        const ys: number[] = []
+        for (let i = layout.start; i < layout.end; i++) {
+            const value = this.#values[seriesIndex][i]
+            if (!Number.isNaN(value)) {
+                xs.push(rows[i].x)
+                ys.push(value)
+            }
+        }
+        if (xs.length < 2) {
+            return
+        }
+        const points: PathPoint[] = []
+        if (series.trendline === "linear") {
+            const fit = linearFit(xs, ys)
+            for (const x of [xs[0], xs[xs.length - 1]]) {
+                points.push({x: layout.x.scale.map(x), y: axis.scale.map(fit.slope * x + fit.intercept)})
+            }
+        } else {
+            const averaged = movingAverage(ys, series.trendline.window)
+            averaged.forEach((y, i) => {
+                if (y !== undefined) {
+                    points.push({x: layout.x.scale.map(xs[i]), y: axis.scale.map(y)})
+                }
+            })
+        }
+        svg.appendChild(svgEl("path", {class: "vtc-chart-trend", d: linePath(points, "linear"), stroke: color}))
+    }
+
     /** A scatter point's radius. `BubbleChart` overrides it */
     protected pointRadius(_point: ChartPointType, _series: ChartSeriesType): number {
         return 4
@@ -672,11 +907,21 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
             title, anchor,
             rows: [{
                 label: series.label ?? series.key,
-                value: this.#formatFor(series)(value),
+                value: this.#valueText(series, value, rows[row]),
                 color: seriesColor(seriesIndex, series.color),
             }],
             detail: {label: title, index: rows[row].index, series: series.key, value},
         }
+    }
+
+    /** A value as the tooltip says it, with its uncertainty when it has one */
+    #valueText(series: ChartSeriesType, value: number, row: Row): string {
+        const format = this.#formatFor(series)
+        const error = errorRange(row.point.errors?.[series.key])
+        if (!error) {
+            return format(value)
+        }
+        return error[0] === error[1] ? `${format(value)} ± ${format(error[0])}` : `${format(value)} (-${format(error[0])} +${format(error[1])})`
     }
 
     #drawBars(parent: SVGElement, layout: Layout, bars: {s: ChartSeriesType, i: number}[]): void {
@@ -738,7 +983,88 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
             svg.appendChild(line)
             this.#cursorLine = line
         }
+        this.#crosshair = undefined
+        if (this.chartAttrs.crosshair) {
+            const hiddenEl = (tag: string, className: string) => {
+                const element = svgEl(tag, {class: className, visibility: "hidden"})
+                svg.appendChild(element)
+                return element
+            }
+            this.#crosshair = {
+                horizontal: hiddenEl("line", "vtc-chart-crosshair"),
+                vertical: hiddenEl("line", "vtc-chart-crosshair"),
+                yBadge: hiddenEl("rect", "vtc-chart-crosshair-badge"),
+                yText: hiddenEl("text", "vtc-chart-crosshair-text"),
+                xBadge: hiddenEl("rect", "vtc-chart-crosshair-badge"),
+                xText: hiddenEl("text", "vtc-chart-crosshair-text"),
+            }
+        }
         svg.appendChild(svgEl("rect", {class: "vtc-chart-hit", x: box.left, y: box.top, width: box.width, height: box.height}))
+    }
+
+    /**
+     * Puts the crosshair at the pointer and reads both axes off there. The elements are pooled and their
+     * attributes rewritten, since this runs for every pointer move.
+     */
+    #moveCrosshair(layout: Layout, x: number, y: number): void {
+        const parts = this.#crosshair
+        if (!parts) {
+            return
+        }
+        const {box} = layout
+        const inside = x >= box.left && x <= box.left + box.width && y >= box.top && y <= box.top + box.height
+        const visibility = inside ? "visible" : "hidden"
+        for (const part of Object.values(parts)) {
+            part.setAttribute("visibility", visibility)
+        }
+        if (!inside) {
+            return
+        }
+        const set = (element: SVGElement, values: Record<string, number>) => {
+            for (const name of Object.keys(values)) {
+                element.setAttribute(name, String(values[name]))
+            }
+        }
+        set(parts.horizontal, {x1: box.left, x2: box.left + box.width, y1: y, y2: y})
+        set(parts.vertical, {x1: x, x2: x, y1: box.top, y2: box.top + box.height})
+        const yLabel = layout.yLeft.format(Number(layout.yLeft.scale.invert(y).toPrecision(4)))
+        const yWidth = yLabel.length * GLYPH + 8
+        set(parts.yBadge, {x: box.left - yWidth, y: y - 9, width: yWidth, height: 18, rx: 2})
+        set(parts.yText, {x: box.left - yWidth / 2, y})
+        parts.yText.textContent = yLabel
+        const row = (this.#rows as Row[])[this.#nearestRow(layout, x)]
+        const xLabel = row ? this.#rowTitle(row) : ""
+        const xWidth = xLabel.length * GLYPH + 8
+        const bottom = box.top + box.height
+        set(parts.xBadge, {x: x - xWidth / 2, y: bottom + 2, width: xWidth, height: 18, rx: 2})
+        set(parts.xText, {x, y: bottom + 11})
+        parts.xText.textContent = xLabel
+    }
+
+    #hideCrosshair(): void {
+        if (this.#crosshair) {
+            for (const part of Object.values(this.#crosshair)) {
+                part.setAttribute("visibility", "hidden")
+            }
+        }
+    }
+
+    /** Another chart in the group moved its cursor: show the same x here, or clear when it left */
+    #showSyncedCursor(x: number | undefined): void {
+        const layout = this.#layout
+        if (!layout) {
+            return
+        }
+        if (x === undefined) {
+            this.#clearCursor()
+            this.tooltip.hide()
+            return
+        }
+        const pixel = layout.x.scale.map(x)
+        if (pixel < layout.box.left || pixel > layout.box.left + layout.box.width) {
+            return
+        }
+        this.#showRow(layout, this.#nearestRow(layout, pixel), pixel, layout.box.top + layout.box.height / 2)
     }
 
     /** The row whose x is closest to a pixel. `#rows` is sorted, so this needn't look at them all */
@@ -770,16 +1096,21 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         const rect = svg.getBoundingClientRect()
         const x = event.clientX - rect.left
         const y = event.clientY - rect.top
+        this.#moveCrosshair(layout, x, y)
         if ((this.chartAttrs.hover ?? this.defaultHover()) === "nearest") {
             this.#showNearest(layout, x, y)
         } else {
-            this.#showRow(layout, this.#nearestRow(layout, x), x, y)
+            const row = this.#nearestRow(layout, x)
+            this.#showRow(layout, row, x, y)
+            this.#broadcastCursor?.((this.#rows as Row[])[row]?.x)
         }
     }
 
     #onPointerLeave = () => {
         this.#clearCursor()
+        this.#hideCrosshair()
         this.tooltip.hide()
+        this.#broadcastCursor?.(undefined)
     }
 
     #clearCursor(): void {
@@ -808,7 +1139,7 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
             if (!Number.isNaN(value) && !this.isEntryHidden(i)) {
                 // Each series' own value, never its stacked running total - "this series contributed
                 // 12" is the fact a reader wants, not "the stack reached 40".
-                tips.push({label: s.label ?? s.key, value: this.#formatFor(s)(value), color: seriesColor(i, s.color)})
+                tips.push({label: s.label ?? s.key, value: this.#valueText(s, value, row), color: seriesColor(i, s.color)})
             }
         })
         // Anchored on the pointer, not on the centre: that keeps the offset constant as the cursor

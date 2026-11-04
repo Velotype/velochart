@@ -7,7 +7,7 @@ import { PolarAreaChart, type PolarAreaChartAttrsType } from "./radial/polar-are
 import { PieChart, type PieChartAttrsType, type PieSliceType } from "./radial/pie-chart.ts"
 import { Gauge, type GaugeAttrsType, type GaugeBandType } from "./radial/gauge.ts"
 import { Sparkline, type SparklineAttrsType, type SparklineVariant } from "./inline/sparkline.ts"
-import { ChartThemeOptions, type ChartAxisType, type ChartBaseAttrsType, type ChartCurve, type ChartPointDetail, type ChartPointType, type ChartSeriesKind, type ChartSeriesType } from "./core/chart-common.ts"
+import { ChartThemeOptions, type ChartAnnotationType, type ChartAxisType, type ChartBaseAttrsType, type ChartCurve, type ChartPointDetail, type ChartPointType, type ChartSeriesKind, type ChartSeriesType } from "./core/chart-common.ts"
 
 export {
     LineChart,
@@ -38,6 +38,7 @@ export {
     type SparklineAttrsType,
     type SparklineVariant,
     ChartThemeOptions,
+    type ChartAnnotationType,
     type ChartAxisType,
     type ChartBaseAttrsType,
     type ChartCurve,

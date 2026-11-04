@@ -544,4 +544,96 @@ describe('chart rendering', () => {
         assertEquals(state, {animated: true, still: false})
     })
 
+
+    itWrap("annotations draw on the plot, and a threshold above the data brings the axis up to it", "features", "#annotated-chart", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const root = document.getElementById("annotated-chart") as HTMLElement
+            const band = root.querySelector("rect.vtc-chart-annotation-band") as SVGRectElement
+            return {
+                labels: Array.from(root.querySelectorAll("text.vtc-chart-annotation-label")).map(t => t.textContent),
+                lines: root.querySelectorAll("line.vtc-chart-annotation-line").length,
+                points: root.querySelectorAll("circle.vtc-chart-annotation-point").length,
+                bandWidth: Number(band.getAttribute("width")),
+                ticks: Array.from(root.querySelectorAll("text.vtc-chart-tick-y")).map(t => t.textContent),
+            }
+        })
+        assertEquals(state.labels.sort(), ["Peak", "Sale", "Target"])
+        assertEquals(state.lines, 1)
+        assertEquals(state.points, 1)
+        if (state.bandWidth <= 0) {fail("ERROR: a band between two categories should have width")}
+        if (!state.ticks.includes("500")) {fail(`ERROR: expected the axis to reach the threshold, got ${JSON.stringify(state.ticks)}`)}
+    })
+
+    itWrap("value labels use the format and sit either side of a bar", "features", "#values-chart", async (_selection: ElementHandle) => {
+        const labels = await page.evaluate(() => Array.from(document.querySelectorAll("#values-chart text.vtc-chart-value-label")).map(t => t.textContent))
+        assertEquals(labels, ["10u", "-5u"])
+    })
+
+    itWrap("error bars reach the given range, widen the axis and read in the tooltip", "features", "#errors-chart", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const root = document.getElementById("errors-chart") as HTMLElement
+            const hit = root.querySelector("rect.vtc-chart-hit") as SVGRectElement
+            const box = hit.getBoundingClientRect()
+            hit.dispatchEvent(new PointerEvent("pointermove", {bubbles: true, clientX: box.right - 5, clientY: box.top + 5}))
+            return {
+                bars: root.querySelectorAll("path.vtc-chart-error").length,
+                ticks: Array.from(root.querySelectorAll("text.vtc-chart-tick-y")).map(t => Number(t.textContent)),
+                tip: (root.querySelector(".vtc-chart-tooltip") as HTMLElement).innerText.replace(/\s+/g, " ").trim(),
+            }
+        })
+        assertEquals(state.bars, 2)
+        if (Math.max(...state.ticks) < 20) {fail(`ERROR: the axis must reach the top of the error bar, got ${state.ticks}`)}
+        if (!state.tip.includes("-1") || !state.tip.includes("+8")) {fail(`ERROR: expected the range in the tooltip, got ${state.tip}`)}
+    })
+
+    itWrap("a linear trend runs through the fit, and a moving average starts once it has enough points", "features", "#trend-chart", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const line = document.querySelector("#trend-chart path.vtc-chart-line")!.getAttribute("d") ?? ""
+            const trend = document.querySelector("#trend-chart path.vtc-chart-trend")!.getAttribute("d") ?? ""
+            const numbers = (d: string) => (d.match(/-?[\d.]+/g) ?? []).map(Number)
+            const dots = document.querySelectorAll("#average-chart circle.vtc-chart-dot").length
+            const average = numbers(document.querySelector("#average-chart path.vtc-chart-trend")!.getAttribute("d") ?? "")
+            return {line: numbers(line), trend: numbers(trend), dots, averagePoints: average.length / 2}
+        })
+        // v = 2n is a perfect line, so its fit starts and ends exactly where the line does
+        assertEquals(state.trend.map(Math.round), [state.line[0], state.line[1], state.line[6], state.line[7]].map(Math.round))
+        assertEquals(state.averagePoints, state.dots - 1)
+    })
+
+    itWrap("a crosshair follows the pointer and reads both axes", "features", "#crosshair-chart", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const root = document.getElementById("crosshair-chart") as HTMLElement
+            const hit = root.querySelector("rect.vtc-chart-hit") as SVGRectElement
+            const box = hit.getBoundingClientRect()
+            hit.dispatchEvent(new PointerEvent("pointermove", {bubbles: true, clientX: box.left + 5, clientY: box.top + box.height / 2}))
+            const shown = Array.from(root.querySelectorAll("line.vtc-chart-crosshair")).filter(l => l.getAttribute("visibility") === "visible").length
+            const text = Array.from(root.querySelectorAll("text.vtc-chart-crosshair-text")).map(t => t.textContent)
+            hit.parentElement!.parentElement!.dispatchEvent(new PointerEvent("pointerleave"))
+            return {shown, text, left: Array.from(root.querySelectorAll("line.vtc-chart-crosshair")).filter(l => l.getAttribute("visibility") === "visible").length}
+        })
+        assertEquals(state.shown, 2)
+        assertEquals(state.text[1], "Jan")
+        if (!/\d/.test(state.text[0] ?? "")) {fail(`ERROR: expected a value on the y badge, got ${state.text[0]}`)}
+        assertEquals(state.left, 0)
+    })
+
+    itWrap("charts in one sync group move their cursors together", "features", "#sync-one", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const one = document.getElementById("sync-one") as HTMLElement
+            const two = document.getElementById("sync-two") as HTMLElement
+            const unrelated = document.getElementById("crosshair-chart") as HTMLElement
+            const hit = one.querySelector("rect.vtc-chart-hit") as SVGRectElement
+            const box = hit.getBoundingClientRect()
+            hit.dispatchEvent(new PointerEvent("pointermove", {bubbles: true, clientX: box.right - 5, clientY: box.top + 5}))
+            const tip = two.querySelector(".vtc-chart-tooltip") as HTMLElement
+            const during = {visible: tip.classList.contains("vtc-chart-tooltip-visible"), text: tip.innerText, other: unrelated.querySelector(".vtc-chart-tooltip")!.classList.contains("vtc-chart-tooltip-visible")}
+            hit.parentElement!.parentElement!.dispatchEvent(new PointerEvent("pointerleave"))
+            return {during, after: tip.classList.contains("vtc-chart-tooltip-visible")}
+        })
+        assertEquals(state.during.visible, true)
+        assertEquals(state.during.other, false)
+        if (!state.during.text.includes("Apr")) {fail(`ERROR: the second chart should show the same category, got ${state.during.text}`)}
+        assertEquals(state.after, false)
+    })
+
 })

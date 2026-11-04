@@ -74,6 +74,21 @@ class FeaturesPage extends Component<EmptyAttrs> {
             <div id="polar-chart"><PolarAreaChart data={[{label: "a", value: 4}, {label: "b", value: 8}, {label: "c", value: 2}]} height={200}/></div>
             <div id="toggle-pie"><PieChart data={[{label: "a", value: 1}, {label: "b", value: 1}]} height={140}/></div>
             <div id="still-chart"><BarChart animate={false} data={negatives} series={[{key: "v"}]} height={100}/></div>
+            <div id="annotated-chart"><LineChart data={months} series={[{key: "sales"}]} height={180} annotations={[
+                {type: "line", value: 500, label: "Target", dashed: true},
+                {type: "band", axis: "x", from: "Feb", to: "Mar", label: "Sale"},
+                {type: "point", x: "Apr", y: 200, label: "Peak"},
+            ]}/></div>
+            <div id="values-chart"><BarChart data={negatives} series={[{key: "v"}]} showValues height={140} formatValue={(n) => `${n}u`}/></div>
+            <div id="errors-chart"><LineChart height={160} series={[{key: "m"}]} data={[
+                {label: "a", values: {m: 10}, errors: {m: 2}},
+                {label: "b", values: {m: 12}, errors: {m: [1, 8]}},
+            ]}/></div>
+            <div id="trend-chart"><LineChart data={[1, 2, 3, 4].map(n => ({x: n, values: {v: n * 2}}))} series={[{key: "v", trendline: "linear"}]} height={140}/></div>
+            <div id="average-chart"><LineChart data={[1, 5, 2, 6, 3].map((v, i) => ({x: i, values: {v}}))} series={[{key: "v", trendline: {type: "moving-average", window: 2}}]} height={140}/></div>
+            <div id="crosshair-chart"><LineChart data={months} series={[{key: "sales"}]} crosshair height={160}/></div>
+            <div id="sync-one"><LineChart data={months} series={[{key: "sales"}]} syncGroup="pair" height={120}/></div>
+            <div id="sync-two"><LineChart data={months} series={[{key: "rate"}]} syncGroup="pair" height={120}/></div>
             <div id="titled-chart"><LineChart title="With a title" data={gaps} series={gapSeries} height={160}/></div>
         </div>
     }

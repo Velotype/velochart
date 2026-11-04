@@ -90,6 +90,10 @@ export type ChartSeriesType = {
     dashed?: boolean
     /** Starts this series hidden, for a reader to turn on from the legend (default: `false`) */
     hidden?: boolean
+    /** Draws a trend through this series: a least-squares line, or a moving average over `window` points */
+    trendline?: "linear" | {type: "moving-average", window: number}
+    /** Writes this series' values beside its marks, as `showValues` does for every series */
+    showValues?: boolean
 }
 
 /** One position along the x axis, with a value per series */
@@ -100,6 +104,38 @@ export type ChartPointType = {
     x?: number | Date
     /** Value per series `key`; a missing key is a gap, never a zero */
     values: Record<string, number | undefined>
+    /** Uncertainty per series `key`, drawn as an error bar: one number for either side, or `[below, above]` */
+    errors?: Record<string, number | [number, number] | undefined>
+}
+
+/** Something drawn on a chart to mark a value or a range, rather than data */
+export type ChartAnnotationType = {
+    /** A line across the plot at one value */
+    type: "line"
+    /** Which axis the value is on (default: `"y"`) */
+    axis?: "x" | "y" | "y2"
+    /** A position on that axis. On a category axis, a category's label or its index */
+    value: number | Date | string
+    label?: string
+    /** A CSS color (default: a quiet grey). Use `var(...)`, so it follows the theme */
+    color?: string
+    /** Draws it dashed (default: `false`) */
+    dashed?: boolean
+} | {
+    /** A shaded range across the plot */
+    type: "band"
+    axis?: "x" | "y" | "y2"
+    from: number | Date | string
+    to: number | Date | string
+    label?: string
+    color?: string
+} | {
+    /** A labelled point */
+    type: "point"
+    x: number | Date | string
+    y: number
+    label?: string
+    color?: string
 }
 
 /** A point a reader activated, as given to `onPointClick` */
@@ -256,6 +292,16 @@ export function mountChartStyles(): void {
 .vtc-chart-hover .vtc-chart-mark-active{opacity:1;}
 .vtc-chart-clickable .vtc-chart-mark,.vtc-chart-clickable .vtc-chart-hit{cursor:pointer;}
 .vtc-chart-point{stroke:var(--background);stroke-width:1;}
+.vtc-chart-annotation-line{stroke:var(--background-7);stroke-width:1;pointer-events:none;}
+.vtc-chart-annotation-band{fill:var(--background-7);opacity:0.12;pointer-events:none;}
+.vtc-chart-annotation-point{fill:var(--background-7);stroke:var(--background);stroke-width:2;pointer-events:none;}
+.vtc-chart-annotation-label{fill:var(--text);font-size:0.8em;font-family:inherit;pointer-events:none;}
+.vtc-chart-value-label{fill:var(--text);font-size:0.8em;font-family:inherit;text-anchor:middle;pointer-events:none;}
+.vtc-chart-error{stroke-width:1.5;fill:none;pointer-events:none;}
+.vtc-chart-trend{fill:none;stroke-width:1.5;stroke-dasharray:6 4;opacity:0.8;pointer-events:none;}
+.vtc-chart-crosshair{stroke:var(--background-6);stroke-width:1;stroke-dasharray:3 3;pointer-events:none;shape-rendering:crispedges;}
+.vtc-chart-crosshair-badge{fill:var(--background-7);pointer-events:none;}
+.vtc-chart-crosshair-text{fill:var(--background);font-size:0.75em;font-family:inherit;dominant-baseline:middle;text-anchor:middle;pointer-events:none;}
 .vtc-chart-ring{fill:none;stroke:var(--background-3);stroke-width:1;pointer-events:none;}
 .vtc-chart-ring-label{dominant-baseline:middle;pointer-events:none;}
 .vtc-chart-spoke{stroke:var(--background-3);stroke-width:1;}

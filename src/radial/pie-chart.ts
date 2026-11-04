@@ -30,6 +30,8 @@ export type PieChartAttrsType = {
     centerLabel?: string
     /** Smaller text under `centerLabel` */
     centerSubLabel?: string
+    /** Writes each slice's share on it, leaving out slices too thin to hold it (default: `false`) */
+    showValues?: boolean
     /** Shows each slice's share of the total in the tooltip (default: `true`) */
     showPercent?: boolean
     /**
@@ -89,6 +91,7 @@ export class PieChart extends ChartFrame<PieChartAttrsType> {
         const radius = Math.max(1, Math.min(width, height) / 2 - 4)
         const innerRadius = radius * Math.min(0.9, Math.max(0, attrs.donut ?? 0))
 
+        const labels: SVGElement[] = []
         let angle = -Math.PI / 2
         attrs.data.forEach((slice, index) => {
             const value = this.isEntryHidden(index) ? 0 : Math.max(0, slice.value)
@@ -118,9 +121,22 @@ export class PieChart extends ChartFrame<PieChartAttrsType> {
                 detail: {label: slice.label, index, value: slice.value},
             })
             marks.appendChild(path)
+            // Under 5% of the circle there is no room for the text, and the tooltip still says it
+            if (attrs.showValues && value / total >= 0.05) {
+                const text = svgEl("text", {
+                    class: "vtc-chart-value-label", x: tipX, y: cy + Math.sin(midAngle) * tipRadius,
+                    "dominant-baseline": "middle",
+                })
+                text.textContent = percent
+                labels.push(text)
+            }
             angle += sweep
         })
         svg.appendChild(marks)
+        // After every slice, so one slice's text is never painted over by the next slice
+        for (const text of labels) {
+            svg.appendChild(text)
+        }
 
         if (innerRadius > 0 && attrs.centerLabel !== undefined) {
             const label = svgEl("text", {
