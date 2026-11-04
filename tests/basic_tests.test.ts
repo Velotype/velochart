@@ -1,7 +1,7 @@
 /// <reference lib="deno.ns" />
 
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd"
-import { fail } from "@std/assert"
+import { assertEquals, fail } from "@std/assert"
 
 import type {Server} from "@velotype/veloserver"
 
@@ -317,4 +317,112 @@ describe('chart rendering', () => {
             fail(`ERROR: sweeping the plot created nodes instead of updating text in place: +${churn.sweep.added}/-${churn.sweep.removed}`)
         }
     })
+
+    itWrap("a missing value is a gap: the line breaks and the tooltip skips it", "features", "#gap-line", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const root = document.getElementById("gap-line") as HTMLElement
+            const spanned = document.getElementById("spanned-line") as HTMLElement
+            const hit = root.querySelector("rect.vtc-chart-hit") as SVGRectElement
+            const box = hit.getBoundingClientRect()
+            // Over the third of five points, which is the missing one for the "b" series
+            hit.dispatchEvent(new PointerEvent("pointermove", {bubbles: true, clientX: box.left + box.width / 2, clientY: box.top + 5}))
+            return {
+                lines: root.querySelectorAll("path.vtc-chart-line").length,
+                spanned: spanned.querySelectorAll("path.vtc-chart-line").length,
+                tipRows: Array.from(root.querySelectorAll(".vtc-chart-tooltip-row")).filter(r => !(r as HTMLElement).hidden).length,
+                cells: Array.from(root.querySelectorAll(".vtc-chart-sr tbody tr:nth-child(3) td")).map(c => c.textContent),
+            }
+        })
+        // Series a is whole and series b is broken in two
+        assertEquals(state.lines, 3)
+        assertEquals(state.spanned, 2)
+        assertEquals(state.tipRows, 1)
+        assertEquals(state.cells, ["3", ""])
+    })
+
+    itWrap("a negative bar hangs below the zero line, and stacks build both ways", "features", "#negative-bars", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const root = document.getElementById("negative-bars") as HTMLElement
+            const axis = root.querySelector("line.vtc-chart-axis") as SVGLineElement
+            const zero = Number(axis.getAttribute("y1"))
+            const bars = Array.from(root.querySelectorAll("rect.vtc-chart-bar")).map(b => ({
+                top: Number(b.getAttribute("y")), bottom: Number(b.getAttribute("y")) + Number(b.getAttribute("height")),
+            }))
+            const stack = Array.from(document.getElementById("negative-stack")!.querySelectorAll("rect.vtc-chart-bar")).map(b => ({
+                top: Number(b.getAttribute("y")), bottom: Number(b.getAttribute("y")) + Number(b.getAttribute("height")),
+            }))
+            const stackZero = Number(document.getElementById("negative-stack")!.querySelector("line.vtc-chart-axis")!.getAttribute("y1"))
+            return {zero, bars, stack, stackZero}
+        })
+        // +10 rises to the zero line, -5 hangs from it
+        assertEquals(Math.round(state.bars[0].bottom), Math.round(state.zero))
+        assertEquals(Math.round(state.bars[1].top), Math.round(state.zero))
+        // Stacked: the +10 and -5 of one category sit either side of zero, not on top of each other
+        assertEquals(Math.round(state.stack[0].bottom), Math.round(state.stackZero))
+        assertEquals(Math.round(state.stack[1].top), Math.round(state.stackZero))
+    })
+
+    itWrap("axes: log ticks are powers of ten, time ticks are dates, and titles are drawn", "features", "#log-time", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const root = document.getElementById("log-time") as HTMLElement
+            return {
+                y: Array.from(root.querySelectorAll("text.vtc-chart-tick-y")).map(t => t.textContent),
+                x: Array.from(root.querySelectorAll("text.vtc-chart-tick-x")).map(t => t.textContent),
+                titles: Array.from(root.querySelectorAll("text.vtc-chart-axis-title")).map(t => t.textContent),
+            }
+        })
+        assertEquals(state.y, ["10", "100", "1000", "10000"])
+        assertEquals(state.titles, ["When", "Requests"])
+        if (state.x.length < 2 || !state.x.some(label => /\d/.test(label ?? ""))) {fail(`ERROR: expected date ticks, got ${JSON.stringify(state.x)}`)}
+    })
+
+    itWrap("axes: a numeric x places points by value, whatever order they came in", "features", "#numeric-x", async (_selection: ElementHandle) => {
+        const dots = await page.evaluate(() => Array.from(document.getElementById("numeric-x")!.querySelectorAll("circle.vtc-chart-dot"))
+            .map(c => Number(c.getAttribute("cx"))))
+        assertEquals(dots.length, 3)
+        // 1, 2 and 10 from an unsorted input: the gap after 2 is eight times the one before it
+        const ratio = (dots[2] - dots[1]) / (dots[1] - dots[0])
+        if (dots[0] >= dots[1] || Math.abs(ratio - 8) > 0.01) {fail(`ERROR: points are not placed by value: ${JSON.stringify(dots)}`)}
+    })
+
+    itWrap("update() changes the data in place, keeping the chart's element", "features", "#updating-chart", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const root = document.getElementById("updating-chart") as HTMLElement
+            const chart = root.querySelector(".vtc-chart") as HTMLElement
+            const before = root.querySelectorAll("rect.vtc-chart-bar").length;
+            (globalThis as unknown as {updatingChart: {update: (attrs: unknown) => void}}).updatingChart.update({
+                data: [{label: "a", values: {v: 1}}, {label: "b", values: {v: 2}}, {label: "c", values: {v: 3}}],
+            })
+            return {
+                before,
+                after: root.querySelectorAll("rect.vtc-chart-bar").length,
+                same: root.querySelector(".vtc-chart") === chart,
+                rows: root.querySelectorAll(".vtc-chart-sr tbody tr").length,
+            }
+        })
+        assertEquals(state, {before: 1, after: 3, same: true, rows: 3})
+    })
+
+    itWrap("a chart with a title keeps its tooltip level with the pointer", "features", "#titled-chart", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const root = document.getElementById("titled-chart") as HTMLElement
+            const hit = root.querySelector("rect.vtc-chart-hit") as SVGRectElement
+            const box = hit.getBoundingClientRect()
+            const y = box.top + box.height / 2
+            hit.dispatchEvent(new PointerEvent("pointermove", {bubbles: true, clientX: box.left + 10, clientY: y}))
+            const tip = (root.querySelector(".vtc-chart-tooltip") as HTMLElement).getBoundingClientRect()
+            return {y, top: tip.top, bottom: tip.bottom}
+        })
+        if (state.y < state.top || state.y > state.bottom) {fail(`ERROR: tooltip sits off the pointer: ${JSON.stringify(state)}`)}
+    })
+
+    itWrap("a pie's hidden table bakes in no English, and takes its column names from attrs", "charts", "#donut-pie-chart", async (_selection: ElementHandle) => {
+        const headers = await page.evaluate(() => ({
+            named: Array.from(document.getElementById("donut-pie-chart")!.querySelectorAll("thead th")).map(th => th.textContent),
+            unnamed: Array.from(document.getElementById("default-pie-chart")!.querySelectorAll("thead th")).map(th => th.textContent),
+        }))
+        assertEquals(headers.named, ["", "Headcount", "Of total"])
+        assertEquals(headers.unnamed, ["", "", ""])
+    })
+
 })

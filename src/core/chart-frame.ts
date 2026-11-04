@@ -3,7 +3,15 @@ import type { RenderableElements } from "./velotype.ts"
 import {
     buildLegend, ChartThemeOptions, ChartTooltip, mountChartStyles, svgEl
 } from "./chart-common.ts"
-import type { ChartBaseAttrsType, ChartDataTable, TooltipBounds } from "./chart-common.ts"
+import type { ChartBaseAttrsType, ChartDataTable, ChartPointDetail, TooltipAnchor, TooltipRow } from "./chart-common.ts"
+
+/** Something drawn that a reader can point at: what its tooltip says, and where it goes */
+export type ChartMark = {
+    title: string
+    rows: TooltipRow[]
+    anchor: TooltipAnchor
+    detail?: ChartPointDetail
+}
 
 /**
  * The container every chart draws into: sizing, redraw-on-resize, tooltip, legend, empty state.
@@ -30,6 +38,14 @@ export abstract class ChartFrame<AttrsType extends ChartBaseAttrsType> extends C
     #lastWidth = 0
     /** Drawing height of the last render, so the tooltip can clamp without a layout read */
     #lastHeight = 0
+    /** The current drawing, for the hover classes and the subclass's own use */
+    #svg: SVGElement | undefined
+    /** Where the drawing starts inside the root, which is where tooltip coordinates are measured from */
+    #drawingTop = 0
+    /** What each drawn mark says. A WeakMap, so a redraw's discarded elements go with their marks */
+    #markOf = new WeakMap<EventTarget, ChartMark>()
+    #activeMark: SVGElement | undefined
+    #plotFrame = 0
     protected tooltip: ChartTooltip
     protected chartAttrs: AttrsType
 
@@ -40,6 +56,12 @@ export abstract class ChartFrame<AttrsType extends ChartBaseAttrsType> extends C
         this.tooltip = new ChartTooltip()
 
         this.#svgHost = document.createElement("div")
+        this.#svgHost.className = "vtc-chart-drawing"
+        // One set of listeners on an element that outlives every redraw, rather than a handler per
+        // mark: a chart may hold thousands of marks, and a redraw replaces all of them.
+        this.#svgHost.addEventListener("pointerover", this.#onPointerOver)
+        this.#svgHost.addEventListener("pointerout", this.#onPointerOut)
+        this.#svgHost.addEventListener("click", this.#onClick)
         this.#srHost = document.createElement("div")
         this.#srHost.className = "vtc-chart-sr"
         this.#legendHost = document.createElement("div")
@@ -75,6 +97,28 @@ export abstract class ChartFrame<AttrsType extends ChartBaseAttrsType> extends C
     override unmount() {
         this.#observer?.disconnect()
         this.#observer = undefined
+        cancelAnimationFrame(this.#plotFrame)
+        this.#plotFrame = 0
+        // A later mount has to draw again, or a re-attached chart would stay as it was left
+        this.#lastWidth = 0
+    }
+
+    /**
+     * Changes some of the chart's attrs and redraws, keeping everything else about it: the element,
+     * what the reader has hidden or zoomed to, and any listeners on the page.
+     *
+     * Reach it through `getComponent`, since a JSX tag evaluates to the element and not the chart:
+     * `const chart = getComponent<LineChart>(<LineChart .../>); chart.update({data})`.
+     */
+    update(attrs: Partial<AttrsType>): void {
+        this.chartAttrs = {...this.chartAttrs, ...attrs}
+        this.attrsChanged(attrs)
+        this.redrawNow()
+    }
+
+    /** For a subclass that derives something from its attrs: called before `update` redraws */
+    protected attrsChanged(_changed: Partial<AttrsType>): void {
+        // Nothing to derive by default
     }
 
     #redraw(): void {
@@ -105,12 +149,7 @@ export abstract class ChartFrame<AttrsType extends ChartBaseAttrsType> extends C
         }
         this.#emptyHost.hidden = true
 
-        const svg = svgEl("svg", {
-            class: "vtc-chart-svg",
-            width: width,
-            height: height,
-            viewBox: `0 0 ${width} ${height}`
-        })
+        const svg = this.#newSvg(width, height)
 
         // Two ways to be readable, and which one applies depends on whether the chart has values a
         // table can hold. A table is much the better of the two - it carries the actual numbers
@@ -129,12 +168,117 @@ export abstract class ChartFrame<AttrsType extends ChartBaseAttrsType> extends C
             this.#srHost.replaceChildren()
         }
 
+        this.#activeMark = undefined
+        this.tooltip.hide()
         this.draw(svg, width, height)
         this.#svgHost.replaceChildren(svg)
+        this.#svg = svg
+        this.#drawingTop = this.#svgHost.offsetTop
 
         const entries = attrs.hideLegend ? [] : this.legendEntries()
         const legend = buildLegend(entries)
         this.#legendHost.replaceChildren(...(legend ? [legend] : []))
+    }
+
+    #newSvg(width: number, height: number): SVGElement {
+        const svg = svgEl("svg", {class: "vtc-chart-svg", width, height, viewBox: `0 0 ${width} ${height}`})
+        if (this.chartAttrs.onPointClick) {
+            svg.classList.add("vtc-chart-clickable")
+        }
+        return svg
+    }
+
+    /**
+     * Rebuilds the drawing alone, on the next frame, however many times it is asked for before then.
+     *
+     * For state that changes at display rate, like a pan. The table and the legend describe the data
+     * rather than the view, so they are left alone.
+     */
+    protected redrawPlot(): void {
+        if (this.#plotFrame !== 0 || this.#lastWidth <= 0) {
+            return
+        }
+        this.#plotFrame = requestAnimationFrame(() => {
+            this.#plotFrame = 0
+            const previous = this.#svg
+            if (!previous) {
+                return
+            }
+            const svg = this.#newSvg(this.#lastWidth, this.#lastHeight)
+            for (const name of ["aria-hidden", "role", "aria-label"]) {
+                const value = previous.getAttribute(name)
+                if (value !== null) {
+                    svg.setAttribute(name, value)
+                }
+            }
+            this.#activeMark = undefined
+            this.draw(svg, this.#lastWidth, this.#lastHeight)
+            previous.replaceWith(svg)
+            this.#svg = svg
+        })
+    }
+
+    /** The element holding the drawing. It outlives every redraw, so listeners belong here */
+    protected get drawingHost(): HTMLDivElement {
+        return this.#svgHost
+    }
+
+    /** The current `<svg>`, which is replaced by every redraw */
+    protected get currentSvg(): SVGElement | undefined {
+        return this.#svg
+    }
+
+    /** Registers something drawn as a thing a reader can point at. Call it from `draw` */
+    protected addMark(element: SVGElement, mark: ChartMark): void {
+        element.classList.add("vtc-chart-mark")
+        this.#markOf.set(element, mark)
+    }
+
+    /** Shows the tooltip. Coordinates are the drawing's own, which sits below any title */
+    protected showTooltip(title: string, rows: TooltipRow[], anchor: TooltipAnchor): void {
+        const top = this.#drawingTop
+        this.tooltip.show(title, rows, {...anchor, y: anchor.y + top}, {
+            width: this.#lastWidth, height: this.#lastHeight + top
+        })
+    }
+
+    #onPointerOver = (event: Event) => {
+        const mark = this.#markOf.get(event.target as EventTarget)
+        if (!mark) {
+            return
+        }
+        const element = event.target as SVGElement
+        this.#activeMark?.classList.remove("vtc-chart-mark-active")
+        this.#activeMark = element
+        element.classList.add("vtc-chart-mark-active")
+        this.#svg?.classList.add("vtc-chart-hover")
+        this.showTooltip(mark.title, mark.rows, mark.anchor)
+    }
+
+    #onPointerOut = (event: Event) => {
+        if (event.target !== this.#activeMark) {
+            return
+        }
+        this.#activeMark?.classList.remove("vtc-chart-mark-active")
+        this.#activeMark = undefined
+        this.#svg?.classList.remove("vtc-chart-hover")
+        this.tooltip.hide()
+    }
+
+    #onClick = (event: Event) => {
+        const callback = this.chartAttrs.onPointClick
+        if (!callback) {
+            return
+        }
+        const detail = this.#markOf.get(event.target as EventTarget)?.detail ?? this.clickDetail(event as MouseEvent)
+        if (detail) {
+            callback(detail)
+        }
+    }
+
+    /** For a chart whose hit target is the whole plot: what a click there activated */
+    protected clickDetail(_event: MouseEvent): ChartPointDetail | undefined {
+        return undefined
     }
 
     /** Forces a redraw at the current width - for a subclass whose state changed */
@@ -147,17 +291,6 @@ export abstract class ChartFrame<AttrsType extends ChartBaseAttrsType> extends C
     /** Formats a value for ticks and tooltips */
     protected format(value: number): string {
         return (this.chartAttrs.formatValue ?? String)(value)
-    }
-
-    /**
-     * The box the tooltip must stay inside.
-     *
-     * Returns the dimensions recorded at draw time rather than reading `clientHeight`: this is
-     * called from `pointermove`, and a layout read there costs a forced reflow per move for a
-     * number the frame already knows.
-     */
-    protected containerBounds(): TooltipBounds {
-        return {width: this.#lastWidth, height: this.#lastHeight}
     }
 
     /** True when there is nothing to draw, so the empty state shows instead */

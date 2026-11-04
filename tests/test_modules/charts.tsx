@@ -78,7 +78,7 @@ class ChartsGallery extends Component<EmptyAttrs> {
                 <h3>PieChart, donut with a centre label</h3>
                 <div id="donut-pie-chart" style={{maxWidth: "320px"}}><PieChart
                     data={departments.map(d => ({label: d.label, value: d.values.headcount ?? 0}))}
-                    donut={0.62} centerLabel="76" centerSubLabel="people"
+                    donut={0.62} centerLabel="76" centerSubLabel="people" valueLabel="Headcount" shareLabel="Of total"
                     height={220} ariaLabel="Headcount share by department"/></div>
             </div>
             <div>

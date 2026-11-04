@@ -3,7 +3,7 @@ import { BarChart, type BarChartAttrsType } from "./cartesian/bar-chart.ts"
 import { PieChart, type PieChartAttrsType, type PieSliceType } from "./radial/pie-chart.ts"
 import { Gauge, type GaugeAttrsType, type GaugeBandType } from "./radial/gauge.ts"
 import { Sparkline, type SparklineAttrsType, type SparklineVariant } from "./inline/sparkline.ts"
-import { ChartThemeOptions, type ChartBaseAttrsType, type ChartPointType, type ChartSeriesType } from "./core/chart-common.ts"
+import { ChartThemeOptions, type ChartAxisType, type ChartBaseAttrsType, type ChartCurve, type ChartPointDetail, type ChartPointType, type ChartSeriesKind, type ChartSeriesType } from "./core/chart-common.ts"
 
 export {
     LineChart,
@@ -22,7 +22,11 @@ export {
     type SparklineAttrsType,
     type SparklineVariant,
     ChartThemeOptions,
+    type ChartAxisType,
     type ChartBaseAttrsType,
+    type ChartCurve,
+    type ChartPointDetail,
     type ChartPointType,
+    type ChartSeriesKind,
     type ChartSeriesType,
 }

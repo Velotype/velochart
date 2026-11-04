@@ -66,7 +66,13 @@ export function seriesColor(index: number, explicit?: string): string {
     return palette[index % palette.length]
 }
 
-/** One series in a cartesian chart (line, area, bar) */
+/** How one series is drawn on a cartesian chart */
+export type ChartSeriesKind = "line" | "area" | "bar" | "scatter"
+
+/** How a line gets from one point to the next */
+export type ChartCurve = "linear" | "smooth" | "step" | "step-before" | "step-after"
+
+/** One series in a cartesian chart */
 export type ChartSeriesType = {
     /** Identifies this series, and is the key read out of each point's `values` */
     key: string
@@ -74,14 +80,58 @@ export type ChartSeriesType = {
     label?: string
     /** Overrides this series' palette slot with an explicit CSS color */
     color?: string
+    /** How this series is drawn (default: what the chart component draws) */
+    type?: ChartSeriesKind
+    /** Which y axis this series reads against (default: `"left"`) */
+    yAxis?: "left" | "right"
+    /** How a line or area joins its points (default: `"linear"`). `"smooth"` never overshoots a value */
+    curve?: ChartCurve
+    /** Draws this series' line dashed (default: `false`) */
+    dashed?: boolean
 }
 
-/** One category along the x axis, with a value per series */
+/** One position along the x axis, with a value per series */
 export type ChartPointType = {
-    /** The category's label, shown on the axis and in the tooltip */
-    label: string
-    /** Value per series `key`; a missing key is plotted as zero */
+    /** The name shown on a category axis and in the tooltip. A numeric or time `x` formats itself when this is unset */
+    label?: string
+    /** Where this point sits on a numeric or time x axis. Unset, the axis is categories in the order given */
+    x?: number | Date
+    /** Value per series `key`; a missing key is a gap, never a zero */
     values: Record<string, number | undefined>
+}
+
+/** A point a reader activated, as given to `onPointClick` */
+export type ChartPointDetail = {
+    /** The name of what was activated: its category, slice, cell or node */
+    label: string
+    /** Its position in the data the chart was given */
+    index: number
+    /** The series' `key`, on a chart that has series. Unset when the whole category was activated */
+    series?: string
+    /** The value, when the activated thing has exactly one */
+    value?: number
+}
+
+/** One axis's configuration on a cartesian chart */
+export type ChartAxisType = {
+    /** What the axis measures. An x axis defaults to `"category"`, or `"time"`/`"linear"` from its points' `x`; a value axis to `"linear"` */
+    type?: "category" | "linear" | "log" | "time"
+    /** A title drawn along the axis */
+    title?: string
+    /** Fixes the low end, rather than following the data */
+    min?: number
+    /** Fixes the high end, rather than following the data */
+    max?: number
+    /** Formats this axis's ticks and the tooltip values read against it (default: `formatValue`, or a date for a time axis) */
+    format?: (value: number) => string
+    /** About how many ticks to draw */
+    tickCount?: number
+    /** Runs the axis the other way (default: `false`) */
+    reverse?: boolean
+    /** Leaves out the grid lines (default: `false`) */
+    hideGrid?: boolean
+    /** Reads a time axis in UTC rather than the browser's zone (default: `false`) */
+    utc?: boolean
 }
 
 /** Attrs every chart in this package accepts */
@@ -115,32 +165,8 @@ export type ChartBaseAttrsType = {
     emptyMessage?: string
     /** Hides the legend even when there is more than one series (default: `false`) */
     hideLegend?: boolean
-}
-
-/** Rounds a raw axis range out to human-readable tick values */
-export function niceTicks(min: number, max: number, targetCount: number): number[] {
-    if (!Number.isFinite(min) || !Number.isFinite(max)) {
-        return [0]
-    }
-    if (min === max) {
-        // A flat series still needs an axis; give it one tick above and below rather than a
-        // degenerate zero-height scale that would divide by zero below.
-        return [min - 1, min, min + 1]
-    }
-    const rawStep = (max - min) / Math.max(1, targetCount)
-    const magnitude = Math.pow(10, Math.floor(Math.log10(rawStep)))
-    // 1/2/5/10 steps are what people read as round numbers, whatever the magnitude
-    const candidates = [1, 2, 5, 10].map(m => m * magnitude)
-    const step = candidates.find(c => c >= rawStep) ?? candidates[candidates.length - 1]
-    const start = Math.floor(min / step) * step
-    const end = Math.ceil(max / step) * step
-    const ticks: number[] = []
-    // Accumulate with an epsilon so float drift can't drop the final tick
-    for (let value = start; value <= end + step * 1e-9; value += step) {
-        // Re-round each step: repeated addition of 0.1 drifts visibly by the tenth tick
-        ticks.push(Number((Math.round(value / step) * step).toFixed(10)))
-    }
-    return ticks
+    /** Called when a reader activates a point, slice, cell or node */
+    onPointClick?: (detail: ChartPointDetail) => void
 }
 
 /** A chart's values in tabular form, which is what a screen reader reads instead of the drawing */
@@ -156,74 +182,6 @@ export type PlotBox = {
     top: number
     width: number
     height: number
-}
-
-/** Maps a value to a y pixel inside the plot box */
-export function yScale(box: PlotBox, min: number, max: number): (value: number) => number {
-    const span = max - min
-    if (span === 0) {
-        return () => box.top + box.height / 2
-    }
-    return (value: number) => box.top + box.height - ((value - min) / span) * box.height
-}
-
-/** Evenly spaced band centres across the plot box, one per category */
-export function bandCentres(box: PlotBox, count: number): number[] {
-    if (count <= 0) {
-        return []
-    }
-    if (count === 1) {
-        return [box.left + box.width / 2]
-    }
-    const step = box.width / count
-    return Array.from({length: count}, (_, i) => box.left + step * i + step / 2)
-}
-
-/**
- * Draws the horizontal grid lines and both sets of tick labels.
- *
- * Category labels are thinned rather than rotated when they would collide: a rotated label is
- * harder to read than an absent one, and the tooltip still names every point.
- */
-export function drawAxes(
-    root: SVGElement,
-    box: PlotBox,
-    ticks: number[],
-    toY: (value: number) => number,
-    categories: string[],
-    centres: number[],
-    formatValue: (value: number) => string
-): void {
-    for (const tick of ticks) {
-        const y = toY(tick)
-        root.appendChild(svgEl("line", {
-            class: "vtc-chart-gridline",
-            x1: box.left, y1: y, x2: box.left + box.width, y2: y
-        }))
-        const label = svgEl("text", {
-            class: "vtc-chart-tick vtc-chart-tick-y",
-            x: box.left - 6, y: y
-        })
-        label.textContent = formatValue(tick)
-        root.appendChild(label)
-    }
-
-    // One label per category if they fit, otherwise every nth - estimated from an average glyph
-    // width rather than measured, since measuring would mean a layout pass per label.
-    const longest = categories.reduce((n, c) => Math.max(n, c.length), 0)
-    const perLabel = Math.max(28, longest * 8.5)
-    const stride = Math.max(1, Math.ceil(perLabel / Math.max(1, box.width / Math.max(1, categories.length))))
-    categories.forEach((category, index) => {
-        if (index % stride !== 0) {
-            return
-        }
-        const label = svgEl("text", {
-            class: "vtc-chart-tick vtc-chart-tick-x",
-            x: centres[index], y: box.top + box.height + 18
-        })
-        label.textContent = category
-        root.appendChild(label)
-    })
 }
 
 let areChartStylesMounted = false
@@ -243,6 +201,7 @@ export function mountChartStyles(): void {
     mountStyles(
 `
 .vtc-chart{width:100%;box-sizing:border-box;display:flex;flex-direction:column;gap:0.5em;position:relative;}
+.vtc-chart-drawing{position:relative;}
 .vtc-chart-svg{display:block;width:100%;overflow:visible;}
 ` +
 /* Visually hidden, still read aloud - the standard clip pattern. This holds each chart's data as a
@@ -286,8 +245,13 @@ export function mountChartStyles(): void {
 .vtc-chart-bar{transition:opacity 0.12s ease-out;}
 .vtc-chart-arc{stroke:var(--background);stroke-width:2;transition:opacity 0.12s ease-out;}
 .vtc-chart-hit{fill:transparent;cursor:default;}
-.vtc-chart-hover .vtc-chart-bar,.vtc-chart-hover .vtc-chart-arc{opacity:0.45;}
-.vtc-chart-bar-active,.vtc-chart-arc-active{opacity:1 !important;}
+.vtc-chart-mark{transition:opacity 0.12s ease-out;}
+.vtc-chart-hover .vtc-chart-mark{opacity:0.45;}
+.vtc-chart-hover .vtc-chart-mark-active{opacity:1;}
+.vtc-chart-clickable .vtc-chart-mark,.vtc-chart-clickable .vtc-chart-hit{cursor:pointer;}
+.vtc-chart-point{stroke:var(--background);stroke-width:1;}
+.vtc-chart-axis-title{fill:var(--background-7);font-size:0.85em;font-weight:500;font-family:inherit;text-anchor:middle;}
+.vtc-chart-tick-y2{text-anchor:start;dominant-baseline:middle;}
 .vtc-chart-empty{
 display:flex;
 align-items:center;
@@ -354,7 +318,7 @@ transition:opacity 0.1s ease-out;
 .vtc-chart-tooltip-name{display:inline-flex;align-items:center;gap:0.4em;}
 .vtc-chart-tooltip-value{font-variant-numeric:tabular-nums;}
 @media (prefers-reduced-motion: reduce){
-.vtc-chart-bar,.vtc-chart-arc,.vtc-chart-tooltip{transition:none;}
+.vtc-chart-bar,.vtc-chart-arc,.vtc-chart-mark,.vtc-chart-tooltip{transition:none;}
 }
 `, "vtc/Chart", "base")
 }
