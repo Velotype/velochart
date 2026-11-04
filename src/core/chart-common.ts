@@ -292,6 +292,17 @@ export function mountChartStyles(): void {
 .vtc-chart-hover .vtc-chart-mark-active{opacity:1;}
 .vtc-chart-clickable .vtc-chart-mark,.vtc-chart-clickable .vtc-chart-hit{cursor:pointer;}
 .vtc-chart-point{stroke:var(--background);stroke-width:1;}
+.vtc-chart-underlay{position:absolute;inset:0;pointer-events:none;overflow:hidden;}
+.vtc-chart-underlay + .vtc-chart-svg{position:relative;}
+.vtc-chart-canvas{display:block;}
+.vtc-chart-zoomable{cursor:grab;}
+.vtc-chart-brushable{cursor:crosshair;}
+.vtc-chart-dragging{cursor:grabbing;}
+.vtc-chart-brush{fill:var(--primary);opacity:0.15;stroke:var(--primary);pointer-events:none;}
+.vtc-chart-slider-track{fill:var(--background-2);}
+.vtc-chart-slider-line{fill:none;stroke:var(--background-6);stroke-width:1;pointer-events:none;}
+.vtc-chart-slider-window{fill:var(--primary);opacity:0.18;cursor:grab;}
+.vtc-chart-slider-handle{fill:var(--primary-7);cursor:ew-resize;}
 .vtc-chart-annotation-line{stroke:var(--background-7);stroke-width:1;pointer-events:none;}
 .vtc-chart-annotation-band{fill:var(--background-7);opacity:0.12;pointer-events:none;}
 .vtc-chart-annotation-point{fill:var(--background-7);stroke:var(--background);stroke-width:2;pointer-events:none;}

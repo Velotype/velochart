@@ -636,4 +636,187 @@ describe('chart rendering', () => {
         assertEquals(state.after, false)
     })
 
+
+    /** The plot's rectangle in client coordinates, for placing a synthetic pointer */
+    const settle = () => new Promise(resolve => setTimeout(resolve, 100))
+
+    itWrap("ctrl and the wheel zoom around the pointer, a plain scroll passes through, and a double click resets", "features", "#zoom-chart", async (_selection: ElementHandle) => {
+        const first = await page.evaluate(() => {
+            const root = document.getElementById("zoom-chart") as HTMLElement
+            const hit = root.querySelector("rect.vtc-chart-hit") as SVGRectElement
+            const box = hit.getBoundingClientRect()
+            const wheel = (ctrlKey: boolean) => {
+                const event = new WheelEvent("wheel", {bubbles: true, cancelable: true, clientX: box.left + box.width / 2, clientY: box.top + 10, deltaY: -600, ctrlKey})
+                hit.dispatchEvent(event)
+                return event.defaultPrevented
+            }
+            return {plain: wheel(false), withCtrl: wheel(true)}
+        })
+        assertEquals(first, {plain: false, withCtrl: true})
+        await settle()
+        const zoomed = await page.evaluate(() => {
+            const root = document.getElementById("zoom-chart") as HTMLElement
+            const chart = (globalThis as unknown as {zoomable: {getView: () => {xMin: number, xMax: number}}}).zoomable
+            return {view: chart.getView(), clipped: root.querySelector("g.vtc-chart-plot")!.hasAttribute("clip-path"), dots: root.querySelectorAll("circle.vtc-chart-dot").length}
+        })
+        if (zoomed.view.xMax - zoomed.view.xMin >= 9) {fail(`ERROR: expected a tighter view, got ${JSON.stringify(zoomed.view)}`)}
+        if (!zoomed.clipped) {fail("ERROR: a zoomed plot must cut its marks off at the edge")}
+        if (zoomed.dots >= 10) {fail(`ERROR: only the rows in view should be drawn, got ${zoomed.dots}`)}
+        await page.evaluate(() => document.querySelector("#zoom-chart .vtc-chart-drawing")!.dispatchEvent(new MouseEvent("dblclick", {bubbles: true})))
+        await settle()
+        const reset = await page.evaluate(() => (globalThis as unknown as {zoomable: {getView: () => unknown}}).zoomable.getView() === undefined)
+        assertEquals(reset, true)
+    })
+
+    itWrap("dragging pans within the data, and zoom never runs past it", "features", "#zoom-chart", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const chart = (globalThis as unknown as {zoomable: {zoomTo: (v: unknown) => void, getView: () => {xMin: number, xMax: number}}}).zoomable
+            chart.zoomTo({xMin: 2, xMax: 5})
+            return chart.getView()
+        })
+        assertEquals([state.xMin, state.xMax], [2, 5])
+        await settle()
+        const panned = await page.evaluate(() => {
+            const root = document.getElementById("zoom-chart") as HTMLElement
+            const chart = (globalThis as unknown as {zoomable: {getView: () => {xMin: number, xMax: number}}}).zoomable
+            const hit = root.querySelector("rect.vtc-chart-hit") as SVGRectElement
+            const box = hit.getBoundingClientRect()
+            const fire = (type: string, x: number) => hit.dispatchEvent(new PointerEvent(type, {bubbles: true, button: 0, clientX: x, clientY: box.top + 10, pointerId: 1}))
+            fire("pointerdown", box.left + box.width / 2)
+            fire("pointermove", box.left + box.width / 2 - box.width / 3)
+            const once = chart.getView()
+            // Far past the end of the data
+            fire("pointermove", box.left - box.width * 10)
+            const far = chart.getView()
+            fire("pointerup", box.left)
+            return {once, far}
+        })
+        if (panned.once.xMin <= 2) {fail(`ERROR: dragging left should move the view right, got ${JSON.stringify(panned.once)}`)}
+        assertEquals(panned.far.xMax, 9.5)
+        assertEquals(panned.far.xMax - panned.far.xMin, 3)
+    })
+
+    itWrap("a brush reports the range and points, without zooming unless asked", "features", "#brush-chart", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const root = document.getElementById("brush-chart") as HTMLElement
+            const hit = root.querySelector("rect.vtc-chart-hit") as SVGRectElement
+            const box = hit.getBoundingClientRect()
+            const fire = (type: string, x: number) => hit.dispatchEvent(new PointerEvent(type, {bubbles: true, button: 0, clientX: x, clientY: box.top + 10, pointerId: 1}))
+            fire("pointerdown", box.left + box.width * 0.25)
+            fire("pointermove", box.left + box.width * 0.52)
+            const drawn = root.querySelectorAll("rect.vtc-chart-brush").length
+            fire("pointerup", box.left + box.width * 0.52)
+            const global = globalThis as unknown as {lastBrush: {xMin: number, xMax: number, points: {label: string}[]}, brushed: {getView: () => unknown}}
+            return {
+                drawn, gone: root.querySelectorAll("rect.vtc-chart-brush").length,
+                labels: global.lastBrush.points.map(point => point.label),
+                view: global.brushed.getView() ?? null,
+            }
+        })
+        assertEquals(state.drawn, 1)
+        assertEquals(state.gone, 0)
+        assertEquals(state.labels, ["d2", "d3", "d4"])
+        assertEquals(state.view, null)
+    })
+
+    itWrap("a range slider shows the whole of the data and its window sets the view", "features", "#slider-chart", async (_selection: ElementHandle) => {
+        const before = await page.evaluate(() => {
+            const root = document.getElementById("slider-chart") as HTMLElement
+            const handle = root.querySelector("rect.vtc-chart-slider-handle-max") as SVGRectElement
+            const box = handle.getBoundingClientRect()
+            const svgBox = root.querySelector("svg")!.getBoundingClientRect()
+            const plot = root.querySelector("rect.vtc-chart-hit") as SVGRectElement
+            const fire = (type: string, x: number) => handle.dispatchEvent(new PointerEvent(type, {bubbles: true, button: 0, clientX: x, clientY: box.top + 5, pointerId: 1}))
+            fire("pointerdown", box.left + 3)
+            fire("pointermove", box.left + 3 - plot.getBoundingClientRect().width / 2)
+            fire("pointerup", box.left)
+            return {
+                view: (globalThis as unknown as {slid: {getView: () => {xMin: number, xMax: number}}}).slid.getView(),
+                inside: box.bottom <= svgBox.bottom + 1,
+            }
+        })
+        if (!before.inside) {fail("ERROR: the slider has to fit inside the chart's height")}
+        if (before.view.xMax > 5 || before.view.xMax < 4) {fail(`ERROR: expected the window's end near the middle, got ${JSON.stringify(before.view)}`)}
+    })
+
+    itWrap("long lines thin to what the pixels show, keep their spike, and the tooltip still reads every point", "large", "#long-line", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const count = (id: string) => (document.querySelector(`#${id} path.vtc-chart-line`)!.getAttribute("d")!.match(/L /g) ?? []).length
+            const root = document.getElementById("long-line") as HTMLElement
+            const hit = root.querySelector("rect.vtc-chart-hit") as SVGRectElement
+            const box = hit.getBoundingClientRect()
+            hit.dispatchEvent(new PointerEvent("pointermove", {bubbles: true, clientX: box.left + box.width / 2, clientY: box.top + 5}))
+            const peak = (id: string) => {
+                const hitBox = document.querySelector(`#${id} rect.vtc-chart-hit`)!.getBoundingClientRect()
+                return (document.querySelector(`#${id} path.vtc-chart-line`) as SVGPathElement).getBoundingClientRect().top - hitBox.top
+            }
+            return {
+                lttb: count("long-line"), minMax: count("long-minmax"), whole: count("long-whole"),
+                plotWidth: box.width,
+                tip: (root.querySelector(".vtc-chart-tooltip-title") as HTMLElement).innerText,
+                peaks: [peak("long-line"), peak("long-minmax")],
+                tableRows: root.querySelectorAll(".vtc-chart-sr tbody tr").length,
+            }
+        })
+        if (state.lttb > state.plotWidth * 2) {fail(`ERROR: expected at most two points per pixel, got ${state.lttb}`)}
+        if (state.minMax > 200) {fail(`ERROR: expected the threshold honoured, got ${state.minMax}`)}
+        assertEquals(state.whole, 1999)
+        if (!/^\d+$/.test(state.tip.replace(/\D/g, ""))) {fail(`ERROR: expected a position in the tooltip, got ${state.tip}`)}
+        // The one 40-high spike has to survive, so the line reaches near the top of the plot
+        for (const peak of state.peaks) {
+            if (peak > 30) {fail(`ERROR: a spike was lost in thinning: top of the line is ${peak}px down`)}
+        }
+        assertEquals(state.tableRows, 1000)
+    })
+
+    itWrap("appendData coalesces a burst into one drawing and drops old points", "features", "#stream-chart", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const chart = (globalThis as unknown as {streaming: {appendData: (points: unknown[], options: unknown) => void}}).streaming
+            const root = document.getElementById("stream-chart") as HTMLElement
+            const before = root.querySelector("svg")
+            for (let i = 1; i <= 50; i++) {
+                chart.appendData([{x: i, values: {v: i}}], {maxPoints: 20})
+            }
+            return {sameSvgUntilNextFrame: root.querySelector("svg") === before}
+        })
+        assertEquals(state.sameSvgUntilNextFrame, true)
+        await settle()
+        const dots = await page.evaluate(() => document.querySelectorAll("#stream-chart circle.vtc-chart-dot").length)
+        assertEquals(dots, 20)
+    })
+
+    itWrap("the canvas renderer paints the marks and leaves the axes and hover in the SVG", "large", "#canvas-chart", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const root = document.getElementById("canvas-chart") as HTMLElement
+            const canvas = root.querySelector("canvas") as HTMLCanvasElement
+            const pixels = canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height).data
+            let painted = 0
+            for (let i = 3; i < pixels.length; i += 4) {
+                if (pixels[i] > 0) {painted++}
+            }
+            const hit = root.querySelector("rect.vtc-chart-hit") as SVGRectElement
+            const box = hit.getBoundingClientRect()
+            hit.dispatchEvent(new PointerEvent("pointermove", {bubbles: true, clientX: box.left + 50, clientY: box.top + 5}))
+            return {
+                painted,
+                lines: root.querySelectorAll("path.vtc-chart-line").length,
+                ticks: root.querySelectorAll("text.vtc-chart-tick-y").length,
+                tip: root.querySelector(".vtc-chart-tooltip")!.classList.contains("vtc-chart-tooltip-visible"),
+            }
+        })
+        if (state.painted < 100) {fail(`ERROR: expected the line painted on the canvas, found ${state.painted} pixels`)}
+        assertEquals(state.lines, 0)
+        if (state.ticks < 2) {fail("ERROR: expected the axis to stay in the SVG")}
+        assertEquals(state.tip, true)
+    })
+
+    itWrap("charts in a group zoom together", "features", "#synced-a", async (_selection: ElementHandle) => {
+        const view = await page.evaluate(() => {
+            const global = globalThis as unknown as {syncedA: {zoomTo: (v: unknown) => void}, syncedB: {getView: () => unknown}}
+            global.syncedA.zoomTo({xMin: 1, xMax: 4})
+            return global.syncedB.getView()
+        })
+        assertEquals(view, {xMin: 1, xMax: 4})
+    })
+
 })

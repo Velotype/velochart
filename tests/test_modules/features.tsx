@@ -35,6 +35,20 @@ const months = [
     {label: "Apr", values: {sales: 200, rate: 24, extra: 6}},
 ]
 
+const ten = Array.from({length: 10}, (_, i) => ({label: `d${i}`, values: {v: i + 1}}))
+const expose = <T,>(name: string, chart: T): T => {
+    (globalThis as unknown as Record<string, unknown>)[name] = chart
+    return chart
+}
+const zoomable = expose("zoomable", getComponent<LineChart>(<LineChart data={ten} series={[{key: "v"}]} zoom="x" height={160}/>))
+const brushed = expose("brushed", getComponent<LineChart>(<LineChart data={ten} series={[{key: "v"}]} brush height={160} onBrush={(selection) => {
+    (globalThis as unknown as {lastBrush: unknown}).lastBrush = selection
+}}/>))
+const slid = expose("slid", getComponent<LineChart>(<LineChart data={ten} series={[{key: "v"}]} rangeSlider height={200}/>))
+const streaming = expose("streaming", getComponent<LineChart>(<LineChart data={[{x: 0, values: {v: 1}}]} series={[{key: "v"}]} height={120}/>))
+const syncedA = expose("syncedA", getComponent<LineChart>(<LineChart data={ten} series={[{key: "v"}]} zoom="x" syncGroup="zooming" height={100}/>))
+const syncedB = expose("syncedB", getComponent<LineChart>(<LineChart data={ten} series={[{key: "v"}]} zoom="x" syncGroup="zooming" height={100}/>))
+
 const updating = getComponent<BarChart>(<BarChart data={[{label: "a", values: {v: 1}}]} series={[{key: "v"}]} height={120}/>)
 ;(globalThis as unknown as {updatingChart: BarChart}).updatingChart = updating
 
@@ -89,6 +103,12 @@ class FeaturesPage extends Component<EmptyAttrs> {
             <div id="crosshair-chart"><LineChart data={months} series={[{key: "sales"}]} crosshair height={160}/></div>
             <div id="sync-one"><LineChart data={months} series={[{key: "sales"}]} syncGroup="pair" height={120}/></div>
             <div id="sync-two"><LineChart data={months} series={[{key: "rate"}]} syncGroup="pair" height={120}/></div>
+            <div id="zoom-chart">{zoomable}</div>
+            <div id="brush-chart">{brushed}</div>
+            <div id="slider-chart">{slid}</div>
+            <div id="stream-chart">{streaming}</div>
+            <div id="synced-a">{syncedA}</div>
+            <div id="synced-b">{syncedB}</div>
             <div id="titled-chart"><LineChart title="With a title" data={gaps} series={gapSeries} height={160}/></div>
         </div>
     }

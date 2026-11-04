@@ -40,6 +40,11 @@ export abstract class ChartFrame<AttrsType extends ChartBaseAttrsType> extends C
     #lastHeight = 0
     /** The current drawing, for the hover classes and the subclass's own use */
     #svg: SVGElement | undefined
+    /** Behind the drawing, for a chart that paints some of its marks on a canvas */
+    #underlay: HTMLDivElement | undefined
+    /** The next click ended a drag rather than activating anything */
+    #swallowClick = false
+    #tableTimer = 0
     /** Where the drawing starts inside the root, which is where tooltip coordinates are measured from */
     #drawingTop = 0
     /** What each drawn mark says. A WeakMap, so a redraw's discarded elements go with their marks */
@@ -107,6 +112,8 @@ export abstract class ChartFrame<AttrsType extends ChartBaseAttrsType> extends C
         this.#plotFrame = 0
         cancelAnimationFrame(this.#tweenFrame)
         this.#tweenFrame = 0
+        clearTimeout(this.#tableTimer)
+        this.#tableTimer = 0
         // A later mount has to draw again, or a re-attached chart would stay as it was left
         this.#lastWidth = 0
     }
@@ -145,7 +152,8 @@ export abstract class ChartFrame<AttrsType extends ChartBaseAttrsType> extends C
         this.#lastHeight = height
 
         if (this.isEmpty()) {
-            this.#svgHost.replaceChildren()
+            this.#svg?.remove()
+            this.#svg = undefined
             this.#srHost.replaceChildren()
             this.#legendHost.replaceChildren()
             this.#emptyHost.hidden = false
@@ -187,7 +195,11 @@ export abstract class ChartFrame<AttrsType extends ChartBaseAttrsType> extends C
                 svg.classList.add("vtc-chart-enter")
             }
         }
-        this.#svgHost.replaceChildren(svg)
+        if (this.#svg) {
+            this.#svg.replaceWith(svg)
+        } else {
+            this.#svgHost.appendChild(svg)
+        }
         this.#svg = svg
         this.#drawingTop = this.#svgHost.offsetTop
 
@@ -351,6 +363,10 @@ export abstract class ChartFrame<AttrsType extends ChartBaseAttrsType> extends C
 
     #onClick = (event: Event) => {
         const callback = this.chartAttrs.onPointClick
+        if (this.#swallowClick) {
+            this.#swallowClick = false
+            return
+        }
         if (!callback) {
             return
         }
@@ -358,6 +374,40 @@ export abstract class ChartFrame<AttrsType extends ChartBaseAttrsType> extends C
         if (detail) {
             callback(detail)
         }
+    }
+
+    /** Marks the click that follows the end of a drag as not being a click */
+    protected swallowNextClick(): void {
+        this.#swallowClick = true
+        // A drag released off the chart produces no click here, and must not eat the next real one
+        setTimeout(() => {
+            this.#swallowClick = false
+        }, 0)
+    }
+
+    /** A layer behind the drawing that survives every redraw. Created when first asked for */
+    protected get underlay(): HTMLDivElement {
+        if (!this.#underlay) {
+            this.#underlay = document.createElement("div")
+            this.#underlay.className = "vtc-chart-underlay"
+            this.#underlay.setAttribute("aria-hidden", "true")
+            this.#svgHost.prepend(this.#underlay)
+        }
+        return this.#underlay
+    }
+
+    /** Rebuilds the screen reader's table soon, for data arriving too quickly to rebuild it each time */
+    protected refreshTableSoon(): void {
+        if (this.#tableTimer !== 0) {
+            return
+        }
+        this.#tableTimer = setTimeout(() => {
+            this.#tableTimer = 0
+            const table = this.dataTable()
+            if (table) {
+                this.#srHost.replaceChildren(buildDataTable(this.chartAttrs.ariaLabel ?? this.chartAttrs.title, table))
+            }
+        }, 1000)
     }
 
     /** For a chart whose hit target is the whole plot: what a click there activated */

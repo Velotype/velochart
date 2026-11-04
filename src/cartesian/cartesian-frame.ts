@@ -8,7 +8,10 @@ import {
     fullTimeFormat, linearScale, logDomain, logScale, logTicks, niceTicks, ticksWithin, timeTicks
 } from "../core/scale.ts"
 import type { Scale, ScaleKind } from "../core/scale.ts"
-import { joinCursorGroup } from "./cursor-sync.ts"
+import { CanvasMarks } from "./canvas-marks.ts"
+import { joinSyncGroup } from "./cursor-sync.ts"
+import { lttb, minMax } from "../core/downsample.ts"
+import type { DownsampleAlgorithm } from "../core/downsample.ts"
 import { errorRange, linearFit, movingAverage } from "./statistics.ts"
 import { areaPath, linePath } from "./line-path.ts"
 import type { PathPoint } from "./line-path.ts"
@@ -56,7 +59,55 @@ export type CartesianAttrsType = {
     crosshair?: boolean
     /** Charts sharing this name move their hover cursors together, and zoom together */
     syncGroup?: string
+    /**
+     * Lets a reader zoom and pan these axes (default: off). Drag pans, ctrl or cmd and the wheel zooms, a
+     * pinch zooms on a touch screen or trackpad, and a double click goes back to everything. Not for
+     * `horizontal` bars.
+     */
+    zoom?: "x" | "y" | "xy"
+    /**
+     * Whether the wheel needs ctrl or cmd held to zoom (default: `"modifier"`). `"always"` takes every
+     * scroll over the chart, which traps a reader scrolling down the page, so reach for it only when
+     * the chart fills the page.
+     */
+    wheelZoom?: "modifier" | "always"
+    /** Called whenever the view changes, with `undefined` once it is back to everything */
+    onZoom?: (view: ChartViewType | undefined) => void
+    /** Dragging selects a range on x, or a rectangle with `"xy"`. With `zoom` set, shift and drag pans */
+    brush?: true | "x" | "xy"
+    /** Called when a brush is released, with the range and the points in it */
+    onBrush?: (selection: ChartViewType & {points: ChartPointType[]}) => void
+    /** Zooms to a range when it is brushed (default: `true` when `zoom` is set) */
+    brushZoom?: boolean
+    /** Draws an overview under the plot with a window a reader can drag and resize. Needs no `zoom` (default: `false`) */
+    rangeSlider?: boolean
+    /**
+     * Thins a long line to what its pixels can show, when it has more than `threshold` points in view
+     * (default: `{algorithm: "lttb", threshold: twice the plot's width}`). The tooltip and the hidden table
+     * still read every point. `false` draws them all.
+     */
+    downsample?: false | {algorithm?: DownsampleAlgorithm, threshold?: number}
+    /**
+     * `"canvas"` paints marks on a canvas instead of as elements (default: `"svg"`), which is what makes
+     * tens of thousands of points or bars practical. Axes, annotations and interaction stay as they are.
+     * A smooth line draws straight, and a mark can't be hovered on its own, so `hover: "mark"` reads `"index"`.
+     */
+    renderer?: "svg" | "canvas"
+    /** The most rows the hidden table holds, sampled evenly from the data (default: `1000`) */
+    maxTableRows?: number
 } & ChartBaseAttrsType & IdAttr & StylePassthroughAttrs
+
+/** A chart's view: the domain in axis units. `yMin` and `yMax` are the left axis's, and are unset unless y was zoomed */
+export type ChartViewType = {xMin: number, xMax: number, yMin?: number, yMax?: number}
+
+/** What the reader has zoomed to, as this class holds it: each y axis has its own range */
+type View = {xMin: number, xMax: number, yLeft?: [number, number], yRight?: [number, number]}
+
+/** How the current pointer drag got started */
+type Drag =
+    | {kind: "pan", startX: number, startY: number, view: {x: Scale, y: Scale, yRight?: Scale}, moved: boolean}
+    | {kind: "brush", startX: number, startY: number, x: number, y: number, moved: boolean}
+    | {kind: "slider-window" | "slider-min" | "slider-max", startX: number, xMin: number, xMax: number, moved: boolean}
 
 type Row = {x: number, point: ChartPointType, index: number}
 
@@ -74,7 +125,16 @@ type Layout = {
     end: number
     /** The pixel a bar group is centred in, along the x axis */
     slot: number
+    /** The overview under the plot, when there is one */
+    slider: {left: number, top: number, width: number, height: number, scale: Scale} | undefined
+    /** Whether anything may run past the plot, so that the marks have to be cut off at its edge */
+    clip: boolean
 }
+
+let nextClipId = 0
+/** The overview's height and the gap above it */
+const SLIDER_HEIGHT = 28
+const SLIDER_GAP = 34
 
 /** Share of a category's slot left empty, so neighbouring groups read as separate */
 const CATEGORY_PADDING = 0.25
@@ -110,25 +170,114 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
     #cursorLine: SVGElement | undefined
     #listening = false
     #crosshair: {horizontal: SVGElement, vertical: SVGElement, yBadge: SVGElement, yText: SVGElement, xBadge: SVGElement, xText: SVGElement} | undefined
-    #leaveCursorGroup: (() => void) | undefined
+    #leaveSyncGroup: (() => void) | undefined
     /** Tells the rest of the group where the cursor went, or that it left */
     #broadcastCursor: ((x: number | undefined) => void) | undefined
+    #broadcastView: ((view: {xMin: number, xMax: number} | undefined) => void) | undefined
+    /** What the reader has zoomed to. Unset, the chart shows everything */
+    #view: View | undefined
+    #drag: Drag | undefined
+    /** Fingers on the chart, for a pinch */
+    #touches = new Map<number, {x: number, y: number}>()
+    #pinchDistance = 0
+    #brushRect: SVGElement | undefined
+    #canvas: CanvasMarks | undefined
+    #clipId = `vtc-chart-clip-${nextClipId++}`
+    #fullX: [number, number] = [0, 1]
 
     override mount() {
         super.mount()
         const group = this.chartAttrs.syncGroup
         if (group !== undefined) {
-            const member = joinCursorGroup(group, (x) => this.#showSyncedCursor(x))
-            this.#broadcastCursor = member.broadcast
-            this.#leaveCursorGroup = member.leave
+            const member = joinSyncGroup(group, {
+                cursor: (x) => this.#showSyncedCursor(x),
+                view: (view) => this.#setView(view, false),
+            })
+            this.#broadcastCursor = member.broadcastCursor
+            this.#broadcastView = member.broadcastView
+            this.#leaveSyncGroup = member.leave
         }
     }
 
     override unmount() {
         super.unmount()
-        this.#leaveCursorGroup?.()
-        this.#leaveCursorGroup = undefined
+        this.#leaveSyncGroup?.()
+        this.#leaveSyncGroup = undefined
         this.#broadcastCursor = undefined
+        this.#broadcastView = undefined
+    }
+
+    /** Zooms to a range. An axis left out of `view` stays as it is */
+    zoomTo(view: ChartViewType): void {
+        const yLeft = view.yMin !== undefined && view.yMax !== undefined ? [view.yMin, view.yMax] as [number, number] : undefined
+        this.#setView({xMin: view.xMin, xMax: view.xMax, yLeft}, true)
+    }
+
+    /** Back to showing everything */
+    resetZoom(): void {
+        this.#setView(undefined, true)
+    }
+
+    /** The range in view, or `undefined` when showing everything */
+    getView(): ChartViewType | undefined {
+        const view = this.#view
+        return view ? {xMin: view.xMin, xMax: view.xMax, yMin: view.yLeft?.[0], yMax: view.yLeft?.[1]} : undefined
+    }
+
+    /**
+     * Adds points to the end of the data, for a live feed. Older points drop off past `maxPoints`.
+     *
+     * Any number of calls between two frames costs one redraw, and a view at the live edge of the data
+     * moves along with it, so a reader looking at the latest stays on the latest.
+     */
+    appendData(points: ChartPointType[], options?: {maxPoints?: number}): void {
+        const data = this.chartAttrs.data
+        const atEdge = this.#view !== undefined && this.#view.xMax >= this.#fullX[1]
+        const span = this.#view ? this.#view.xMax - this.#view.xMin : 0
+        data.push(...points)
+        const max = options?.maxPoints
+        if (max !== undefined && data.length > max) {
+            data.splice(0, data.length - max)
+        }
+        this.#rows = undefined
+        const rows = this.#ensureRows()
+        this.#fullX = this.#xDomain(rows, this.#hasKind("bar"))
+        if (atEdge && this.#view) {
+            this.#view = {...this.#view, xMin: this.#fullX[1] - span, xMax: this.#fullX[1]}
+        }
+        this.refreshTableSoon()
+        this.redrawPlot()
+    }
+
+    #setView(view: View | undefined, announce: boolean): void {
+        this.#view = view
+        this.redrawPlot()
+        if (announce) {
+            this.#broadcastView?.(view ? {xMin: view.xMin, xMax: view.xMax} : undefined)
+            this.chartAttrs.onZoom?.(this.getView())
+        }
+    }
+
+    #hoverMode(): "index" | "mark" | "nearest" | "none" {
+        const mode = this.chartAttrs.hover ?? this.defaultHover()
+        // A mark painted on a canvas isn't an element, so nothing can tell that the pointer is on it
+        return mode === "mark" && this.chartAttrs.renderer === "canvas" ? "index" : mode
+    }
+
+    #canZoom(): boolean {
+        return this.chartAttrs.zoom !== undefined && !(this.chartAttrs.horizontal ?? false)
+    }
+
+    #canBrush(): boolean {
+        return this.chartAttrs.brush !== undefined && !(this.chartAttrs.horizontal ?? false)
+    }
+
+    #markInteractive(svg: SVGElement): void {
+        if (this.#canBrush()) {
+            svg.classList.add("vtc-chart-brushable")
+        } else if (this.#canZoom()) {
+            svg.classList.add("vtc-chart-zoomable")
+        }
     }
 
     /** How a series with no `type` of its own is drawn */
@@ -190,13 +339,16 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
     protected override dataTable(): ChartDataTable | undefined {
         const {series} = this.chartAttrs
         const rows = this.#ensureRows()
+        // Sampled evenly past the cap: a hundred thousand table rows would be slower than the chart, and
+        // no one is reading them aloud one at a time.
+        const every = Math.max(1, Math.ceil(rows.length / (this.chartAttrs.maxTableRows ?? 1000)))
         return {
             columns: ["", ...series.map(s => s.label ?? s.key)],
             // Each series' own value, not the stacked running total - the same choice the tooltip
             // makes, so what is read aloud matches what a sighted reader is told. A gap is an empty
             // cell, which a screen reader announces as one.
-            rows: rows.map((row, position) => [this.#rowTitle(row), ...series.map((s, i) => {
-                const value = this.#values[i][position]
+            rows: rows.filter((_, position) => position % every === 0).map((row, sampled) => [this.#rowTitle(row), ...series.map((s, i) => {
+                const value = this.#values[i][sampled * every]
                 return Number.isNaN(value) ? "" : this.#formatFor(s)(value)
             })])
         }
@@ -300,11 +452,24 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         this.#cursorRow = -1
         this.#cursorLine = undefined
         this.#drawAxes(svg, layout)
-        this.#drawBands(svg, layout)
-        this.#drawMarks(svg, layout)
-        this.#drawExtras(svg, layout)
-        this.#drawAnnotations(svg, layout)
+        // Everything on the plot goes in one group, cut off at the plot's edge when anything could run
+        // past it. Only then: a dot on the top value would otherwise lose its upper half.
+        const plot = svgEl("g", {class: "vtc-chart-plot"})
+        if (layout.clip) {
+            const {box} = layout
+            const clip = svgEl("clipPath", {id: this.#clipId})
+            clip.appendChild(svgEl("rect", {x: box.left, y: box.top, width: box.width, height: box.height}))
+            svg.appendChild(clip)
+            plot.setAttribute("clip-path", `url(#${this.#clipId})`)
+        }
+        this.#drawBands(plot, layout)
+        this.#drawMarks(plot, layout, width, height)
+        this.#drawExtras(plot, layout)
+        this.#drawAnnotations(plot, layout)
+        svg.appendChild(plot)
+        this.#drawSlider(svg, layout)
         this.#attachHover(svg, layout)
+        this.#markInteractive(svg)
     }
 
     #xDomain(rows: Row[], hasBars: boolean): [number, number] {
@@ -420,11 +585,13 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         const rows = this.#ensureRows()
         const horizontal = attrs.horizontal ?? false
         const hasBars = this.#hasKind("bar")
-        const start = 0
-        const end = rows.length
+        const view = this.#view
+        // One row past each end of the view, so a line runs off the edge of the plot rather than stopping short
+        const start = view ? Math.max(0, this.#lowerBound(rows, view.xMin) - 1) : 0
+        const end = view ? Math.min(rows.length, this.#lowerBound(rows, view.xMax) + 2) : rows.length
 
-        const leftDef = attrs.yAxis
-        const rightDef = attrs.yAxisRight
+        const leftDef: ChartAxisType | undefined = view?.yLeft ? {...attrs.yAxis, min: view.yLeft[0], max: view.yLeft[1]} : attrs.yAxis
+        const rightDef: ChartAxisType | undefined = view?.yRight ? {...attrs.yAxisRight, min: view.yRight[0], max: view.yRight[1]} : attrs.yAxisRight
         const hasRight = attrs.series.some(s => s.yAxis === "right")
         const target = 5
         const left = this.#valueAxis(leftDef, "left", start, end, target)
@@ -459,10 +626,11 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
             left: marginLeft,
             top: MARGIN.top,
             width: Math.max(1, width - marginLeft - marginRight),
-            height: Math.max(1, height - MARGIN.top - MARGIN.bottom - (xTitle ? AXIS_TITLE : 0)),
+            height: Math.max(1, height - MARGIN.top - MARGIN.bottom - (xTitle ? AXIS_TITLE : 0) - (attrs.rangeSlider ? SLIDER_GAP + SLIDER_HEIGHT - 10 : 0)),
         }
 
-        const [xMin, xMax] = this.#xDomain(rows, hasBars)
+        this.#fullX = this.#xDomain(rows, hasBars)
+        const [xMin, xMax] = view ? [view.xMin, view.xMax] : this.#fullX
         const xLength = horizontal ? box.height : box.width
         const xFrom = horizontal ? box.top : box.left
         const reversed = attrs.xAxis?.reverse ?? false
@@ -500,7 +668,28 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
                 }
             }
         }
-        return {box, x, yLeft, yRight, start, end, slot}
+        const slider = attrs.rangeSlider && !horizontal ? {
+            left: box.left, width: box.width, height: SLIDER_HEIGHT,
+            top: box.top + box.height + SLIDER_GAP - 6 + (xTitle ? AXIS_TITLE : 0),
+            scale: this.#makeScale(this.#xKind, this.#fullX[0], this.#fullX[1], box.left, box.left + box.width),
+        } : undefined
+        const fixed = [attrs.xAxis, leftDef, rightDef].some(axis => axis?.min !== undefined || axis?.max !== undefined)
+        return {box, x, yLeft, yRight, start, end, slot, slider, clip: view !== undefined || fixed}
+    }
+
+    /** The first row at or past a value */
+    #lowerBound(rows: Row[], value: number): number {
+        let low = 0
+        let high = rows.length
+        while (low < high) {
+            const middle = (low + high) >> 1
+            if (rows[middle].x < value) {
+                low = middle + 1
+            } else {
+                high = middle
+            }
+        }
+        return low
     }
 
     #makeScale(kind: ScaleKind, min: number, max: number, from: number, to: number): Scale {
@@ -622,22 +811,48 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
     }
 
     /** Drawn back to front: bars first, then areas, then lines and points, so a line is never hidden */
-    #drawMarks(svg: SVGElement, layout: Layout): void {
+    #drawMarks(svg: SVGElement, layout: Layout, width: number, height: number): void {
         const {series} = this.chartAttrs
+        const canvas = this.chartAttrs.renderer === "canvas" ? this.#ensureCanvas(width, height) : undefined
+        canvas?.begin(layout.box)
         const marks = svgEl("g", {class: "vtc-chart-marks"})
         const bars = series.map((s, i) => ({s, i})).filter(entry => this.seriesKind(entry.s) === "bar" && !this.isEntryHidden(entry.i))
         if (bars.length > 0) {
-            this.#drawBars(marks, layout, bars)
+            this.#drawBars(marks, layout, bars, canvas)
         }
         series.forEach((s, i) => {
             const kind = this.seriesKind(s)
             if (kind === "line" || kind === "area") {
-                this.#drawLine(marks, layout, s, i, kind === "area")
+                this.#drawLine(marks, layout, s, i, kind === "area", canvas)
             } else if (kind === "scatter") {
-                this.#drawPoints(marks, layout, s, i)
+                this.#drawPoints(marks, layout, s, i, canvas)
             }
         })
         svg.appendChild(marks)
+    }
+
+    #ensureCanvas(width: number, height: number): CanvasMarks {
+        if (!this.#canvas) {
+            this.#canvas = new CanvasMarks(width, height)
+            this.underlay.appendChild(this.#canvas.element)
+        } else if (this.#canvas.element.style.width !== `${width}px` || this.#canvas.element.style.height !== `${height}px`) {
+            this.#canvas.resize(width, height)
+        }
+        return this.#canvas
+    }
+
+    /** A run of points thinned to what the plot's pixels can show */
+    #thin(run: {top: PathPoint[], bottom: PathPoint[]}, layout: Layout): {top: PathPoint[], bottom: PathPoint[]} {
+        const setting = this.chartAttrs.downsample
+        if (setting === false) {
+            return run
+        }
+        const threshold = setting?.threshold ?? Math.max(16, Math.floor(layout.box.width * 2))
+        if (run.top.length <= threshold) {
+            return run
+        }
+        const kept = setting?.algorithm === "min-max" ? minMax(run.top, threshold) : lttb(run.top, threshold)
+        return {top: kept.map(i => run.top[i]), bottom: kept.map(i => run.bottom[i])}
     }
 
     /** The runs of connected points in one series: a gap ends one run, unless `spanGaps` bridges it */
@@ -668,49 +883,105 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         return runs
     }
 
-    #drawLine(parent: SVGElement, layout: Layout, series: ChartSeriesType, seriesIndex: number, area: boolean): void {
+    #drawLine(parent: SVGElement, layout: Layout, series: ChartSeriesType, seriesIndex: number, area: boolean, canvas: CanvasMarks | undefined): void {
         const color = seriesColor(seriesIndex, series.color)
         const curve: ChartCurve = series.curve ?? "linear"
         const axis = this.#axisFor(series, layout)
         const runs = this.#runs(layout, seriesIndex, axis)
         const showDots = this.chartAttrs.showDots ?? (layout.end - layout.start < 40)
-        for (const run of runs) {
+        for (const whole of runs) {
+            const run = this.#thin(whole, layout)
             if (area && run.top.length > 1) {
-                parent.appendChild(svgEl("path", {class: "vtc-chart-area", d: areaPath(run.top, run.bottom, curve), fill: color}))
+                if (canvas) {
+                    canvas.area(run.top, run.bottom, color, curve)
+                } else {
+                    parent.appendChild(svgEl("path", {class: "vtc-chart-area", d: areaPath(run.top, run.bottom, curve), fill: color}))
+                }
             }
             if (run.top.length > 1) {
-                parent.appendChild(svgEl("path", {
-                    class: "vtc-chart-line", d: linePath(run.top, curve), stroke: color,
-                    "stroke-dasharray": series.dashed ? "6 4" : undefined,
-                }))
+                if (canvas) {
+                    canvas.line(run.top, color, curve, series.dashed ?? false)
+                } else {
+                    parent.appendChild(svgEl("path", {
+                        class: "vtc-chart-line", d: linePath(run.top, curve), stroke: color,
+                        "stroke-dasharray": series.dashed ? "6 4" : undefined,
+                    }))
+                }
             }
             // A point with a gap on both sides has no line, so it gets a dot whatever showDots says
             if (showDots || run.top.length === 1) {
-                for (const point of run.top) {
-                    parent.appendChild(svgEl("circle", {class: "vtc-chart-dot", cx: point.x, cy: point.y, r: 3, fill: color}))
+                if (canvas) {
+                    canvas.circles(run.top.map(point => ({...point, r: 3})), color)
+                } else {
+                    for (const point of run.top) {
+                        parent.appendChild(svgEl("circle", {class: "vtc-chart-dot", cx: point.x, cy: point.y, r: 3, fill: color}))
+                    }
                 }
             }
         }
     }
 
-    #drawPoints(parent: SVGElement, layout: Layout, series: ChartSeriesType, seriesIndex: number): void {
+    #drawPoints(parent: SVGElement, layout: Layout, series: ChartSeriesType, seriesIndex: number, canvas: CanvasMarks | undefined): void {
         const rows = this.#rows as Row[]
         const color = seriesColor(seriesIndex, series.color)
         const axis = this.#axisFor(series, layout)
         const highs = this.#shownHighs[seriesIndex]
-        const hoverMarks = (this.chartAttrs.hover ?? this.defaultHover()) === "mark"
+        const hoverMarks = this.#hoverMode() === "mark"
+        const painted: {x: number, y: number, r: number}[] = []
         for (let i = layout.start; i < layout.end; i++) {
             if (Number.isNaN(highs[i])) {
                 continue
             }
             const cx = layout.x.scale.map(rows[i].x)
             const cy = axis.scale.map(highs[i])
+            if (canvas) {
+                painted.push({x: cx, y: cy, r: this.pointRadius(rows[i].point, series)})
+                continue
+            }
             const circle = svgEl("circle", {class: "vtc-chart-point", cx, cy, r: this.pointRadius(rows[i].point, series), fill: color})
             if (hoverMarks) {
                 this.addMark(circle, this.#markFor(i, series, seriesIndex, {left: cx, right: cx, y: cy}))
             }
             parent.appendChild(circle)
         }
+        canvas?.circles(painted, color)
+    }
+
+    /** The overview under the plot: all the data, thinned, with the part in view marked */
+    #drawSlider(svg: SVGElement, layout: Layout): void {
+        const slider = layout.slider
+        if (!slider) {
+            return
+        }
+        const rows = this.#rows as Row[]
+        const {left, top, width, height, scale} = slider
+        svg.appendChild(svgEl("rect", {class: "vtc-chart-slider-track", x: left, y: top, width, height, rx: 2}))
+        const first = this.chartAttrs.series.findIndex((_, i) => !this.isEntryHidden(i))
+        if (first >= 0) {
+            const highs = this.#highs[first]
+            const seen: number[] = []
+            for (let i = 0; i < highs.length; i++) {
+                if (!Number.isNaN(highs[i])) {
+                    seen.push(highs[i])
+                }
+            }
+            const low = seen.reduce((n, value) => Math.min(n, value), Infinity)
+            const high = seen.reduce((n, value) => Math.max(n, value), -Infinity)
+            const toY = linearScale("linear", low, high === low ? low + 1 : high, top + height - 2, top + 2)
+            const points: PathPoint[] = []
+            for (let i = 0; i < highs.length; i++) {
+                if (!Number.isNaN(highs[i])) {
+                    points.push({x: scale.map(rows[i].x), y: toY.map(highs[i])})
+                }
+            }
+            const kept = minMax(points, Math.floor(width))
+            svg.appendChild(svgEl("path", {class: "vtc-chart-slider-line", d: linePath(kept.map(i => points[i]), "linear")}))
+        }
+        const a = scale.map(this.#view?.xMin ?? scale.min)
+        const b = scale.map(this.#view?.xMax ?? scale.max)
+        svg.appendChild(svgEl("rect", {class: "vtc-chart-slider-window", x: a, y: top, width: Math.max(2, b - a), height}))
+        svg.appendChild(svgEl("rect", {class: "vtc-chart-slider-handle vtc-chart-slider-handle-min", x: a - 3, y: top, width: 6, height, rx: 2}))
+        svg.appendChild(svgEl("rect", {class: "vtc-chart-slider-handle vtc-chart-slider-handle-max", x: b - 3, y: top, width: 6, height, rx: 2}))
     }
 
     /** A position on the x axis as given to an annotation: a value, a date, or a category's label */
@@ -924,10 +1195,10 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         return error[0] === error[1] ? `${format(value)} ± ${format(error[0])}` : `${format(value)} (-${format(error[0])} +${format(error[1])})`
     }
 
-    #drawBars(parent: SVGElement, layout: Layout, bars: {s: ChartSeriesType, i: number}[]): void {
+    #drawBars(parent: SVGElement, layout: Layout, bars: {s: ChartSeriesType, i: number}[], canvas: CanvasMarks | undefined): void {
         const rows = this.#rows as Row[]
         const {stacked, horizontal} = this.chartAttrs
-        const hoverMarks = (this.chartAttrs.hover ?? this.defaultHover()) === "mark"
+        const hoverMarks = this.#hoverMode() === "mark"
         const group = Math.max(1, layout.slot * (1 - CATEGORY_PADDING))
         const thickness = stacked ? group : group / bars.length
         for (let rowIndex = layout.start; rowIndex < layout.end; rowIndex++) {
@@ -946,6 +1217,14 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
                 const across = Math.max(1, thickness - (stacked ? 0 : 1))
                 const length = Math.abs(to - from)
                 const color = seriesColor(bar.i, bar.s.color)
+                if (canvas) {
+                    if (horizontal) {
+                        canvas.rect(Math.min(from, to), along, length, across, color)
+                    } else {
+                        canvas.rect(along, Math.min(from, to), across, length, color)
+                    }
+                    return
+                }
                 const rect = horizontal
                     ? svgEl("rect", {class: "vtc-chart-bar", x: Math.min(from, to), y: along, width: length, height: across, fill: color, rx: 2})
                     : svgEl("rect", {class: "vtc-chart-bar", x: along, y: Math.min(from, to), width: across, height: length, fill: color, rx: 2})
@@ -967,11 +1246,18 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
      * The listeners go on the drawing's host, which survives a redraw, rather than on this rect.
      */
     #attachHover(svg: SVGElement, layout: Layout): void {
-        const mode = this.chartAttrs.hover ?? this.defaultHover()
+        const mode = this.#hoverMode()
         if (!this.#listening) {
             this.#listening = true
-            this.drawingHost.addEventListener("pointermove", this.#onPointerMove)
-            this.drawingHost.addEventListener("pointerleave", this.#onPointerLeave)
+            const host = this.drawingHost
+            host.addEventListener("pointerdown", this.#onPointerDown)
+            host.addEventListener("pointermove", this.#onPointerMove)
+            host.addEventListener("pointerup", this.#onPointerUp)
+            host.addEventListener("pointercancel", this.#onPointerUp)
+            host.addEventListener("pointerleave", this.#onPointerLeave)
+            host.addEventListener("dblclick", this.#onDoubleClick)
+            // Not passive: holding the page still is the point of a zoom on the wheel
+            host.addEventListener("wheel", this.#onWheel, {passive: false})
         }
         if (mode !== "index" && mode !== "nearest") {
             return
@@ -1087,10 +1373,300 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         return low
     }
 
+    /** A pointer event's position in the drawing's own coordinates */
+    #position(event: MouseEvent): {x: number, y: number} {
+        const rect = (this.currentSvg as SVGElement).getBoundingClientRect()
+        return {x: event.clientX - rect.left, y: event.clientY - rect.top}
+    }
+
+    #inPlot(layout: Layout, x: number, y: number): boolean {
+        const {box} = layout
+        return x >= box.left && x <= box.left + box.width && y >= box.top && y <= box.top + box.height
+    }
+
+    /** Keeps an x range within the data and no tighter than the closest two points */
+    #clampX(min: number, max: number): [number, number] {
+        const [fullMin, fullMax] = this.#fullX
+        const rows = this.#rows as Row[]
+        const tightest = this.#xKind === "category" ? 1 : this.#smallestGap(rows)
+        let low = min
+        let high = max
+        if (high - low < tightest) {
+            const middle = (low + high) / 2
+            low = middle - tightest / 2
+            high = middle + tightest / 2
+        }
+        if (high - low >= fullMax - fullMin) {
+            return [fullMin, fullMax]
+        }
+        if (low < fullMin) {
+            high += fullMin - low
+            low = fullMin
+        }
+        if (high > fullMax) {
+            low -= high - fullMax
+            high = fullMax
+        }
+        return [low, high]
+    }
+
+    /** The view that `from`-`to` pixels on each axis would show, read off the current scales */
+    #viewFromPixels(layout: Layout, x0: number, x1: number, y0: number, y1: number, zoomY: boolean): View {
+        const [xMin, xMax] = this.#clampX(layout.x.scale.invert(x0), layout.x.scale.invert(x1))
+        const yOf = (axis: Axis | undefined): [number, number] | undefined => {
+            if (!zoomY || !axis) {
+                return undefined
+            }
+            const a = axis.scale.invert(y0)
+            const b = axis.scale.invert(y1)
+            return [Math.min(a, b), Math.max(a, b)]
+        }
+        return {xMin, xMax, yLeft: yOf(layout.yLeft) ?? this.#view?.yLeft, yRight: yOf(layout.yRight) ?? this.#view?.yRight}
+    }
+
+    /** Zooms by `factor` around a pixel, on the axes `zoom` allows */
+    #zoomAround(layout: Layout, x: number, y: number, factor: number): void {
+        const {box} = layout
+        const zoom = this.chartAttrs.zoom ?? "x"
+        const zoomX = zoom !== "y"
+        const zoomY = zoom !== "x"
+        const x0 = zoomX ? x - (x - box.left) * factor : box.left
+        const x1 = zoomX ? x + (box.left + box.width - x) * factor : box.left + box.width
+        const y0 = zoomY ? y - (y - box.top) * factor : box.top
+        const y1 = zoomY ? y + (box.top + box.height - y) * factor : box.top + box.height
+        const next = this.#viewFromPixels(layout, x0, x1, y0, y1, zoomY)
+        const [fullMin, fullMax] = this.#fullX
+        // Zoomed back out to everything, which is not a view at all: the y axis goes back to following the data
+        if (next.xMin <= fullMin && next.xMax >= fullMax && factor > 1) {
+            this.#setView(undefined, true)
+        } else {
+            this.#setView(next, true)
+        }
+    }
+
+    #onWheel = (event: WheelEvent) => {
+        const layout = this.#layout
+        if (!layout || !this.currentSvg || !this.#canZoom()) {
+            return
+        }
+        const {x, y} = this.#position(event)
+        if (!this.#inPlot(layout, x, y)) {
+            return
+        }
+        // A trackpad pinch arrives as a wheel event with ctrlKey set
+        if ((this.chartAttrs.wheelZoom ?? "modifier") === "modifier" && !event.ctrlKey && !event.metaKey) {
+            return
+        }
+        event.preventDefault()
+        this.#zoomAround(layout, x, y, Math.exp(event.deltaY * 0.002))
+    }
+
+    #onDoubleClick = () => {
+        if (this.#view) {
+            this.#setView(undefined, true)
+        }
+    }
+
+    #onPointerDown = (event: PointerEvent) => {
+        const layout = this.#layout
+        if (!layout || !this.currentSvg || event.button !== 0) {
+            return
+        }
+        const {x, y} = this.#position(event)
+        const target = (event.target as Element).getAttribute?.("class") ?? ""
+        if (event.pointerType === "touch") {
+            this.#touches.set(event.pointerId, {x, y})
+            if (this.#touches.size === 2 && this.#canZoom()) {
+                const [a, b] = [...this.#touches.values()]
+                this.#pinchDistance = Math.hypot(a.x - b.x, a.y - b.y)
+                this.#drag = undefined
+                return
+            }
+        }
+        let drag: Drag | undefined
+        const [fullMin, fullMax] = this.#fullX
+        const xMin = this.#view?.xMin ?? fullMin
+        const xMax = this.#view?.xMax ?? fullMax
+        if (target.includes("vtc-chart-slider-handle-min")) {
+            drag = {kind: "slider-min", startX: x, xMin, xMax, moved: false}
+        } else if (target.includes("vtc-chart-slider-handle-max")) {
+            drag = {kind: "slider-max", startX: x, xMin, xMax, moved: false}
+        } else if (target.includes("vtc-chart-slider-window")) {
+            drag = {kind: "slider-window", startX: x, xMin, xMax, moved: false}
+        } else if (this.#inPlot(layout, x, y)) {
+            if (this.#canBrush() && !(event.shiftKey && this.#canZoom())) {
+                drag = {kind: "brush", startX: x, startY: y, x, y, moved: false}
+            } else if (this.#canZoom()) {
+                drag = {kind: "pan", startX: x, startY: y, moved: false, view: {x: layout.x.scale, y: layout.yLeft.scale, yRight: layout.yRight?.scale}}
+            }
+        }
+        if (drag) {
+            this.#drag = drag
+            try {
+                this.drawingHost.setPointerCapture(event.pointerId)
+            } catch {
+                // The pointer has already gone, so there is nothing to keep hold of
+            }
+            this.tooltip.hide()
+        }
+    }
+
+    #continueDrag(layout: Layout, drag: Drag, x: number, y: number): void {
+        drag.moved ||= Math.abs(x - drag.startX) > 3
+        if (drag.kind === "pan") {
+            const zoom = this.chartAttrs.zoom ?? "x"
+            const dx = zoom === "y" ? 0 : x - drag.startX
+            const dy = zoom === "x" ? 0 : y - drag.startY
+            drag.moved ||= Math.abs(dy) > 3
+            const {box} = layout
+            const span = (scale: Scale, a: number, b: number): [number, number] => {
+                const low = scale.invert(a)
+                const high = scale.invert(b)
+                return [Math.min(low, high), Math.max(low, high)]
+            }
+            const [xMin, xMax] = this.#clampX(drag.view.x.invert(box.left - dx), drag.view.x.invert(box.left + box.width - dx))
+            const yLeft = zoom !== "x" ? span(drag.view.y, box.top - dy, box.top + box.height - dy) : this.#view?.yLeft
+            const yRight = zoom !== "x" && drag.view.yRight ? span(drag.view.yRight, box.top - dy, box.top + box.height - dy) : this.#view?.yRight
+            this.#setView({xMin, xMax, yLeft, yRight}, true)
+        } else if (drag.kind === "brush") {
+            drag.x = x
+            drag.y = y
+            this.#showBrush(layout, drag)
+        } else if (layout.slider) {
+            const scale = layout.slider.scale
+            const delta = scale.invert(x) - scale.invert(drag.startX)
+            const [fullMin, fullMax] = this.#fullX
+            let xMin = drag.xMin
+            let xMax = drag.xMax
+            if (drag.kind === "slider-window") {
+                xMin += delta
+                xMax += delta
+            } else if (drag.kind === "slider-min") {
+                xMin = Math.min(xMin + delta, xMax)
+            } else {
+                xMax = Math.max(xMax + delta, xMin)
+            }
+            const [low, high] = this.#clampX(xMin, xMax)
+            this.#setView(low <= fullMin && high >= fullMax ? undefined : {...this.#view, xMin: low, xMax: high}, true)
+        }
+    }
+
+    /** The rectangle a brush covers. A plain `brush` is the whole height of the plot */
+    #brushBounds(layout: Layout, drag: {startX: number, startY: number, x: number, y: number}) {
+        const {box} = layout
+        const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value))
+        const x0 = clamp(Math.min(drag.startX, drag.x), box.left, box.left + box.width)
+        const x1 = clamp(Math.max(drag.startX, drag.x), box.left, box.left + box.width)
+        if (this.chartAttrs.brush !== "xy") {
+            return {x0, x1, y0: box.top, y1: box.top + box.height}
+        }
+        return {
+            x0, x1,
+            y0: clamp(Math.min(drag.startY, drag.y), box.top, box.top + box.height),
+            y1: clamp(Math.max(drag.startY, drag.y), box.top, box.top + box.height),
+        }
+    }
+
+    #showBrush(layout: Layout, drag: {startX: number, startY: number, x: number, y: number}): void {
+        const svg = this.currentSvg
+        if (!svg) {
+            return
+        }
+        if (!this.#brushRect || this.#brushRect.ownerSVGElement !== svg) {
+            this.#brushRect = svgEl("rect", {class: "vtc-chart-brush"})
+            svg.appendChild(this.#brushRect)
+        }
+        const bounds = this.#brushBounds(layout, drag)
+        this.#brushRect.setAttribute("x", String(bounds.x0))
+        this.#brushRect.setAttribute("y", String(bounds.y0))
+        this.#brushRect.setAttribute("width", String(bounds.x1 - bounds.x0))
+        this.#brushRect.setAttribute("height", String(bounds.y1 - bounds.y0))
+    }
+
+    #finishBrush(layout: Layout, drag: {startX: number, startY: number, x: number, y: number}): void {
+        this.#brushRect?.remove()
+        this.#brushRect = undefined
+        const bounds = this.#brushBounds(layout, drag)
+        const a = layout.x.scale.invert(bounds.x0)
+        const b = layout.x.scale.invert(bounds.x1)
+        const xMin = Math.min(a, b)
+        const xMax = Math.max(a, b)
+        const whole = this.chartAttrs.brush !== "xy"
+        const yA = layout.yLeft.scale.invert(bounds.y0)
+        const yB = layout.yLeft.scale.invert(bounds.y1)
+        const yMin = whole ? undefined : Math.min(yA, yB)
+        const yMax = whole ? undefined : Math.max(yA, yB)
+        const rows = this.#rows as Row[]
+        const points: ChartPointType[] = []
+        for (let i = this.#lowerBound(rows, xMin); i < rows.length && rows[i].x <= xMax; i++) {
+            if (whole) {
+                points.push(rows[i].point)
+            } else if (this.chartAttrs.series.some((_, s) => {
+                const value = this.#highs[s][i]
+                return !Number.isNaN(value) && value >= (yMin as number) && value <= (yMax as number)
+            })) {
+                points.push(rows[i].point)
+            }
+        }
+        this.chartAttrs.onBrush?.({xMin, xMax, yMin, yMax, points})
+        if (this.chartAttrs.brushZoom ?? this.#canZoom()) {
+            const [low, high] = this.#clampX(xMin, xMax)
+            const yLeft = whole || yMin === undefined || yMax === undefined ? this.#view?.yLeft : [yMin, yMax] as [number, number]
+            this.#setView({xMin: low, xMax: high, yLeft, yRight: this.#view?.yRight}, true)
+        }
+    }
+
+    #onPointerUp = (event: PointerEvent) => {
+        this.#touches.delete(event.pointerId)
+        const drag = this.#drag
+        this.#drag = undefined
+        if (!drag) {
+            return
+        }
+        if (drag.moved) {
+            this.swallowNextClick()
+            const layout = this.#layout
+            if (drag.kind === "brush" && layout) {
+                this.#finishBrush(layout, drag)
+            }
+        } else if (drag.kind === "brush") {
+            this.#brushRect?.remove()
+            this.#brushRect = undefined
+        }
+    }
+
+    #continuePinch(layout: Layout, event: PointerEvent): boolean {
+        const known = this.#touches.get(event.pointerId)
+        if (!known || this.#touches.size !== 2 || !this.#canZoom()) {
+            return false
+        }
+        const position = this.#position(event)
+        known.x = position.x
+        known.y = position.y
+        const [a, b] = [...this.#touches.values()]
+        const distance = Math.hypot(a.x - b.x, a.y - b.y)
+        if (this.#pinchDistance > 0 && distance > 0) {
+            this.#zoomAround(layout, (a.x + b.x) / 2, (a.y + b.y) / 2, this.#pinchDistance / distance)
+        }
+        this.#pinchDistance = distance
+        return true
+    }
+
     #onPointerMove = (event: PointerEvent) => {
         const layout = this.#layout
         const svg = this.currentSvg
-        if (!layout || !svg || (event.target as Element).getAttribute("class") !== "vtc-chart-hit") {
+        if (!layout || !svg) {
+            return
+        }
+        if (event.pointerType === "touch" && this.#continuePinch(layout, event)) {
+            return
+        }
+        if (this.#drag) {
+            const position = this.#position(event)
+            this.#continueDrag(layout, this.#drag, position.x, position.y)
+            return
+        }
+        if ((event.target as Element).getAttribute("class") !== "vtc-chart-hit") {
             return
         }
         const rect = svg.getBoundingClientRect()
@@ -1148,16 +1724,32 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         this.showTooltip(this.#rowTitle(row), tips, {left: Math.min(x, centre), right: Math.max(x, centre), y})
     }
 
+    /** The rows within `pixels` of an x, or every row in view if there are none that close */
+    #rowsNear(layout: Layout, x: number, pixels: number): [number, number] {
+        const rows = this.#rows as Row[]
+        const a = layout.x.scale.invert(x - pixels)
+        const b = layout.x.scale.invert(x + pixels)
+        const start = this.#lowerBound(rows, Math.min(a, b))
+        let end = start
+        while (end < rows.length && rows[end].x <= Math.max(a, b)) {
+            end++
+        }
+        return end > start ? [start, end] : [layout.start, layout.end]
+    }
+
     #showNearest(layout: Layout, x: number, y: number): void {
         const rows = this.#rows as Row[]
         const {series} = this.chartAttrs
         let best = Infinity
         let bestRow = -1
         let bestSeries = -1
+        // Only rows within reach of the pointer, since this runs for every move and the rows are sorted.
+        // Past that a point is not what the reader is pointing at, unless nothing at all is closer.
+        const reach = this.#rowsNear(layout, x, 48)
         for (let s = 0; s < series.length; s++) {
             const axis = this.#axisFor(series[s], layout)
             const highs = this.#shownHighs[s]
-            for (let i = layout.start; i < layout.end; i++) {
+            for (let i = reach[0]; i < reach[1]; i++) {
                 if (Number.isNaN(highs[i])) {
                     continue
                 }

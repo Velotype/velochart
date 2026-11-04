@@ -37,7 +37,7 @@ export async function startAppServer(server_port: number): Promise<Server<Server
             }
         }
     ))
-    const setOfModules = ['charts','features']
+    const setOfModules = ['charts','features','large','more-charts']
     setOfModules.forEach((module) => {
         router.get(`/${module}`, function() {
             const response = new Response(`<!DOCTYPE html><html><body>

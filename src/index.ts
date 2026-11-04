@@ -1,5 +1,7 @@
 import { LineChart, AreaChart, type LineChartAttrsType, type AreaChartAttrsType } from "./cartesian/line-chart.ts"
 import { BarChart, type BarChartAttrsType } from "./cartesian/bar-chart.ts"
+import type { ChartViewType } from "./cartesian/cartesian-frame.ts"
+import type { DownsampleAlgorithm } from "./core/downsample.ts"
 import { MixedChart, type MixedChartAttrsType } from "./cartesian/mixed-chart.ts"
 import { ScatterChart, BubbleChart, type ScatterChartAttrsType, type BubbleChartAttrsType, type ScatterPointType, type ScatterSeriesType } from "./cartesian/scatter-chart.ts"
 import { RadarChart, type RadarChartAttrsType } from "./radial/radar-chart.ts"
@@ -38,6 +40,8 @@ export {
     type SparklineAttrsType,
     type SparklineVariant,
     ChartThemeOptions,
+    type ChartViewType,
+    type DownsampleAlgorithm,
     type ChartAnnotationType,
     type ChartAxisType,
     type ChartBaseAttrsType,
