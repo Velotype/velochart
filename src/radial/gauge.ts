@@ -51,6 +51,20 @@ export type GaugeAttrsType = {
  * this is for a level being watched.
  */
 export class Gauge extends ChartFrame<GaugeAttrsType> {
+    /** The value the arc is drawn at, on its way to `value` during an update */
+    #shownValue: number | undefined
+
+    protected override attrsChanged(changed: Partial<GaugeAttrsType>): void {
+        const from = this.#shownValue
+        const to = changed.value
+        if (to === undefined || from === undefined) {
+            return
+        }
+        this.tween(300, (progress) => {
+            this.#shownValue = from + (to - from) * progress
+        })
+    }
+
     protected override isEmpty(): boolean {
         return !Number.isFinite(this.chartAttrs.value)
     }
@@ -105,7 +119,8 @@ export class Gauge extends ChartFrame<GaugeAttrsType> {
         // stay visible as a rim on both edges. Drawn full-thickness it covers them completely,
         // which makes `bands` look like it does nothing.
         const inset = (attrs.bands?.length ?? 0) > 0 ? thickness * 0.28 : 0
-        const valueAngle = toAngle(attrs.value)
+        this.#shownValue ??= attrs.value
+        const valueAngle = toAngle(this.#shownValue)
         if (valueAngle > start) {
             svg.appendChild(svgEl("path", {
                 class: "vtc-chart-arc",

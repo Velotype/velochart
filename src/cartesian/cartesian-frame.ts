@@ -90,6 +90,10 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
     /** The lower and upper edge of each value once stacked. Unstacked, the lower edge is zero */
     #lows: Float64Array[] = []
     #highs: Float64Array[] = []
+    /** What is drawn this frame: `#highs`/`#lows`, or on their way there during a change of data */
+    #shownHighs: Float64Array[] = []
+    #shownLows: Float64Array[] = []
+    #seededHidden = false
     #layout: Layout | undefined
     /** The nearest row the marker sits on, so an unchanged hover rewrites nothing */
     #cursorRow = -1
@@ -107,7 +111,36 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         return series.type ?? this.defaultSeriesKind()
     }
 
-    protected override attrsChanged(_changed: Partial<AttrsType>): void {
+    protected override attrsChanged(changed: Partial<AttrsType>): void {
+        const fromHighs = this.#shownHighs
+        const fromLows = this.#shownLows
+        const rowCount = this.#rows?.length ?? -1
+        this.#rows = undefined
+        if (!changed.data && !changed.series) {
+            return
+        }
+        const rows = this.#ensureRows()
+        // A change of shape has no in-between to show, so only values moving get a transition
+        if (rows.length !== rowCount || fromHighs.length !== this.#highs.length || rows.length > 2000) {
+            return
+        }
+        const highs = this.#highs
+        const lows = this.#lows
+        const mix = (from: Float64Array[], to: Float64Array[], progress: number) => to.map((column, s) => {
+            const mixed = new Float64Array(column.length)
+            for (let i = 0; i < column.length; i++) {
+                const start = from[s][i]
+                mixed[i] = Number.isNaN(start) ? column[i] : start + (column[i] - start) * progress
+            }
+            return mixed
+        })
+        this.tween(300, (progress) => {
+            this.#shownHighs = progress === 1 ? highs : mix(fromHighs, highs, progress)
+            this.#shownLows = progress === 1 ? lows : mix(fromLows, lows, progress)
+        })
+    }
+
+    protected override entryToggled(): void {
         this.#rows = undefined
     }
 
@@ -190,6 +223,14 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
             }
             return column
         })
+        if (!this.#seededHidden) {
+            this.#seededHidden = true
+            series.forEach((s, i) => {
+                if (s.hidden) {
+                    this.setEntryHidden(i, true)
+                }
+            })
+        }
         this.#lows = []
         this.#highs = []
         const positive = {left: new Float64Array(rows.length), right: new Float64Array(rows.length)}
@@ -200,7 +241,7 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
             const side = s.yAxis === "right" ? "right" : "left"
             for (let i = 0; i < rows.length; i++) {
                 const value = this.#values[seriesIndex][i]
-                if (Number.isNaN(value)) {
+                if (Number.isNaN(value) || this.isEntryHidden(seriesIndex)) {
                     low[i] = NaN
                     high[i] = NaN
                 } else if (stacked) {
@@ -216,6 +257,8 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
             this.#lows.push(low)
             this.#highs.push(high)
         })
+        this.#shownHighs = this.#highs
+        this.#shownLows = this.#lows
         return rows
     }
 
@@ -528,7 +571,7 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
     #drawMarks(svg: SVGElement, layout: Layout): void {
         const {series} = this.chartAttrs
         const marks = svgEl("g", {class: "vtc-chart-marks"})
-        const bars = series.map((s, i) => ({s, i})).filter(entry => this.seriesKind(entry.s) === "bar")
+        const bars = series.map((s, i) => ({s, i})).filter(entry => this.seriesKind(entry.s) === "bar" && !this.isEntryHidden(entry.i))
         if (bars.length > 0) {
             this.#drawBars(marks, layout, bars)
         }
@@ -546,8 +589,8 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
     /** The runs of connected points in one series: a gap ends one run, unless `spanGaps` bridges it */
     #runs(layout: Layout, seriesIndex: number, axis: Axis): {top: PathPoint[], bottom: PathPoint[]}[] {
         const rows = this.#rows as Row[]
-        const highs = this.#highs[seriesIndex]
-        const lows = this.#lows[seriesIndex]
+        const highs = this.#shownHighs[seriesIndex]
+        const lows = this.#shownLows[seriesIndex]
         const span = this.chartAttrs.spanGaps ?? false
         const runs: {top: PathPoint[], bottom: PathPoint[]}[] = []
         let current: {top: PathPoint[], bottom: PathPoint[]} | undefined
@@ -600,7 +643,7 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         const rows = this.#rows as Row[]
         const color = seriesColor(seriesIndex, series.color)
         const axis = this.#axisFor(series, layout)
-        const highs = this.#highs[seriesIndex]
+        const highs = this.#shownHighs[seriesIndex]
         const hoverMarks = (this.chartAttrs.hover ?? this.defaultHover()) === "mark"
         for (let i = layout.start; i < layout.end; i++) {
             if (Number.isNaN(highs[i])) {
@@ -645,12 +688,12 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         for (let rowIndex = layout.start; rowIndex < layout.end; rowIndex++) {
             const centre = layout.x.scale.map(rows[rowIndex].x)
             bars.forEach((bar, barIndex) => {
-                const high = this.#highs[bar.i][rowIndex]
+                const high = this.#shownHighs[bar.i][rowIndex]
                 if (Number.isNaN(high)) {
                     return
                 }
                 const axis = this.#axisFor(bar.s, layout)
-                const low = this.#lows[bar.i][rowIndex]
+                const low = this.#shownLows[bar.i][rowIndex]
                 // A log axis has no zero, so its bars rise from the axis's own low end
                 const from = axis.scale.map(axis.scale.kind === "log" ? axis.scale.min : low)
                 const to = axis.scale.map(high)
@@ -762,7 +805,7 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         const tips: TooltipRow[] = []
         this.chartAttrs.series.forEach((s, i) => {
             const value = this.#values[i][rowIndex]
-            if (!Number.isNaN(value)) {
+            if (!Number.isNaN(value) && !this.isEntryHidden(i)) {
                 // Each series' own value, never its stacked running total - "this series contributed
                 // 12" is the fact a reader wants, not "the stack reached 40".
                 tips.push({label: s.label ?? s.key, value: this.#formatFor(s)(value), color: seriesColor(i, s.color)})
@@ -782,7 +825,7 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         let bestSeries = -1
         for (let s = 0; s < series.length; s++) {
             const axis = this.#axisFor(series[s], layout)
-            const highs = this.#highs[s]
+            const highs = this.#shownHighs[s]
             for (let i = layout.start; i < layout.end; i++) {
                 if (Number.isNaN(highs[i])) {
                     continue

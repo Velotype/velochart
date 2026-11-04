@@ -425,4 +425,123 @@ describe('chart rendering', () => {
         assertEquals(headers.unnamed, ["", "", ""])
     })
 
+
+    itWrap("a mixed chart draws bars and a line, with its own axis on the right", "features", "#mixed-chart", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const root = document.getElementById("mixed-chart") as HTMLElement
+            return {
+                bars: root.querySelectorAll("rect.vtc-chart-bar").length,
+                lines: root.querySelectorAll("path.vtc-chart-line").length,
+                right: Array.from(root.querySelectorAll("text.vtc-chart-tick-y2")).map(t => t.textContent),
+                path: (root.querySelector("path.vtc-chart-line") as SVGPathElement).getAttribute("d") ?? "",
+            }
+        })
+        assertEquals(state.bars, 4)
+        assertEquals(state.lines, 1)
+        if (!state.right.includes("20%")) {fail(`ERROR: expected the right axis in its own format, got ${JSON.stringify(state.right)}`)}
+        if (!state.path.includes("C ")) {fail(`ERROR: expected a curve, got ${state.path}`)}
+    })
+
+    itWrap("a stepped line moves in right angles, and a smooth one never overshoots", "features", "#step-line", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const stepped = document.querySelector("#step-line path.vtc-chart-line")!.getAttribute("d") ?? ""
+            const smooth = document.querySelector("#smooth-line path.vtc-chart-line") as SVGPathElement
+            const axis = document.querySelector("#smooth-line line.vtc-chart-axis")!.getAttribute("y1")
+            return {stepped, bottom: smooth.getBBox().y + smooth.getBBox().height, axis: Number(axis)}
+        })
+        if (!/H [\d.]+ V [\d.]+/.test(state.stepped)) {fail(`ERROR: expected horizontal then vertical moves, got ${state.stepped}`)}
+        // Through 0, 0, 10: a curve that overshoots would dip below the zero line
+        if (state.bottom > state.axis + 0.01) {fail(`ERROR: the smooth line overshoots: ${state.bottom} below ${state.axis}`)}
+    })
+
+    itWrap("the legend hides and shows a series, and keeps its buttons and focus", "features", "#toggle-chart", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const root = document.getElementById("toggle-chart") as HTMLElement
+            const lines = () => root.querySelectorAll("path.vtc-chart-line").length
+            const buttons = Array.from(root.querySelectorAll("button.vtc-chart-legend-item")) as HTMLButtonElement[]
+            const seeded = {lines: lines(), pressed: buttons.map(b => b.getAttribute("aria-pressed"))}
+            buttons[0].focus()
+            buttons[0].click()
+            const after = {
+                lines: lines(),
+                pressed: buttons[0].getAttribute("aria-pressed"),
+                sameButton: root.querySelector("button.vtc-chart-legend-item") === buttons[0],
+                focused: document.activeElement === buttons[0],
+                rows: root.querySelectorAll(".vtc-chart-sr tbody tr td").length,
+            }
+            buttons[0].click()
+            return {seeded, after, restored: lines()}
+        })
+        assertEquals(state.seeded, {lines: 2, pressed: ["true", "true", "false"]})
+        // The hidden table keeps every series: hiding is a view of the data, not a change to it
+        assertEquals(state.after, {lines: 1, pressed: "false", sameButton: true, focused: true, rows: 12})
+        assertEquals(state.restored, 2)
+    })
+
+    itWrap("a pie's legend hides a slice and the rest fill the circle", "features", "#toggle-pie", async (_selection: ElementHandle) => {
+        const arcs = await page.evaluate(() => {
+            const root = document.getElementById("toggle-pie") as HTMLElement;
+            (root.querySelector("button.vtc-chart-legend-item") as HTMLButtonElement).click()
+            return root.querySelectorAll("path.vtc-chart-arc").length
+        })
+        assertEquals(arcs, 1)
+    })
+
+    itWrap("clicking a mark reports what was activated", "features", "#click-chart", async (_selection: ElementHandle) => {
+        const detail = await page.evaluate(() => {
+            (document.querySelector("#click-chart rect.vtc-chart-bar") as SVGRectElement).dispatchEvent(new MouseEvent("click", {bubbles: true}))
+            return (globalThis as unknown as {lastClick: unknown}).lastClick
+        })
+        assertEquals(detail, {label: "up", index: 0, series: "v", value: 10})
+    })
+
+    itWrap("scatter and bubble place points by value, and size a bubble by area", "features", "#scatter-chart", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const scatter = document.getElementById("scatter-chart") as HTMLElement
+            const radii = Array.from(document.querySelectorAll("#bubble-chart circle.vtc-chart-point")).map(c => Number(c.getAttribute("r")))
+            const hit = scatter.querySelector("rect.vtc-chart-hit") as SVGRectElement
+            const outlier = Array.from(scatter.querySelectorAll("circle.vtc-chart-point"))[2].getBoundingClientRect()
+            hit.dispatchEvent(new PointerEvent("pointermove", {bubbles: true, clientX: outlier.left + 2, clientY: outlier.top + 2}))
+            return {
+                points: scatter.querySelectorAll("circle.vtc-chart-point").length,
+                legend: scatter.querySelectorAll(".vtc-chart-legend-item").length,
+                radii,
+                tip: (scatter.querySelector(".vtc-chart-tooltip") as HTMLElement).innerText.replace(/\s+/g, " ").trim(),
+            }
+        })
+        assertEquals(state.points, 3)
+        assertEquals(state.legend, 2)
+        // Four times the size is four times the area, which is twice the radius
+        if (Math.abs(state.radii[1] / state.radii[0] - 2) > 0.01) {fail(`ERROR: bubble radii should follow area: ${state.radii}`)}
+        if (!state.tip.includes("Outlier")) {fail(`ERROR: expected the nearest point named, got ${JSON.stringify(state.tip)}`)}
+    })
+
+    itWrap("a radar draws a shape per series, a spoke per category and reads each by hover", "features", "#radar-chart", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const root = document.getElementById("radar-chart") as HTMLElement
+            const sector = root.querySelector("path.vtc-chart-mark") as SVGPathElement
+            sector.dispatchEvent(new PointerEvent("pointerover", {bubbles: true}))
+            return {
+                shapes: root.querySelectorAll("path.vtc-chart-line").length,
+                spokes: root.querySelectorAll("line.vtc-chart-spoke").length,
+                labels: root.querySelectorAll("text.vtc-chart-spoke-label").length,
+                tipRows: root.querySelectorAll(".vtc-chart-tooltip-row").length,
+            }
+        })
+        assertEquals(state, {shapes: 2, spokes: 4, labels: 4, tipRows: 2})
+    })
+
+    itWrap("a polar area chart sizes each equal slice by its value", "features", "#polar-chart", async (_selection: ElementHandle) => {
+        const widths = await page.evaluate(() => Array.from(document.querySelectorAll("#polar-chart path.vtc-chart-arc")).map(a => (a as SVGPathElement).getBBox()))
+        assertEquals(widths.length, 3)
+    })
+
+    itWrap("animation runs only for the first drawing, and can be turned off", "features", "#still-chart", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => ({
+            animated: document.querySelector("#negative-bars svg")!.classList.contains("vtc-chart-enter"),
+            still: document.querySelector("#still-chart svg")!.classList.contains("vtc-chart-enter"),
+        }))
+        assertEquals(state, {animated: true, still: false})
+    })
+
 })

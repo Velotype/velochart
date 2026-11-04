@@ -88,6 +88,8 @@ export type ChartSeriesType = {
     curve?: ChartCurve
     /** Draws this series' line dashed (default: `false`) */
     dashed?: boolean
+    /** Starts this series hidden, for a reader to turn on from the legend (default: `false`) */
+    hidden?: boolean
 }
 
 /** One position along the x axis, with a value per series */
@@ -165,6 +167,10 @@ export type ChartBaseAttrsType = {
     emptyMessage?: string
     /** Hides the legend even when there is more than one series (default: `false`) */
     hideLegend?: boolean
+    /** Animates the first drawing and changes of data, unless the reader asked for reduced motion (default: `true`) */
+    animate?: boolean
+    /** Lets a reader hide and show entries by clicking the legend (default: `true`) */
+    legendToggle?: boolean
     /** Called when a reader activates a point, slice, cell or node */
     onPointClick?: (detail: ChartPointDetail) => void
 }
@@ -250,6 +256,11 @@ export function mountChartStyles(): void {
 .vtc-chart-hover .vtc-chart-mark-active{opacity:1;}
 .vtc-chart-clickable .vtc-chart-mark,.vtc-chart-clickable .vtc-chart-hit{cursor:pointer;}
 .vtc-chart-point{stroke:var(--background);stroke-width:1;}
+.vtc-chart-ring{fill:none;stroke:var(--background-3);stroke-width:1;pointer-events:none;}
+.vtc-chart-ring-label{dominant-baseline:middle;pointer-events:none;}
+.vtc-chart-spoke{stroke:var(--background-3);stroke-width:1;}
+.vtc-chart-spoke-label{dominant-baseline:middle;}
+.vtc-chart-sector{fill:transparent;}
 .vtc-chart-axis-title{fill:var(--background-7);font-size:0.85em;font-weight:500;font-family:inherit;text-anchor:middle;}
 .vtc-chart-tick-y2{text-anchor:start;dominant-baseline:middle;}
 .vtc-chart-empty{
@@ -294,6 +305,14 @@ color:var(--background-6);
 `
 .vtc-chart-legend-item{display:inline-flex;align-items:center;gap:0.4em;color:var(--text);font-weight:500;}
 .vtc-chart-legend-swatch{width:0.75em;height:0.75em;border-radius:0.15em;flex-shrink:0;}
+.vtc-chart-legend-toggle{appearance:none;border:0;background:none;padding:0.1em 0.2em;margin:0;font:inherit;cursor:pointer;border-radius:0.25em;}
+.vtc-chart-legend-toggle:hover{background-color:var(--background-2);}
+.vtc-chart-legend-toggle[aria-pressed="false"]{color:var(--background-6);text-decoration:line-through;}
+.vtc-chart-legend-toggle[aria-pressed="false"] .vtc-chart-legend-swatch{opacity:0.3;}
+.vtc-chart-enter .vtc-chart-marks{animation:vtc-chart-reveal 0.5s ease-out;}
+.vtc-chart-enter .vtc-chart-marks-radial{animation:vtc-chart-grow 0.4s ease-out;transform-box:fill-box;transform-origin:center;}
+@keyframes vtc-chart-reveal{from{clip-path:inset(-10% 100% -10% -10%);}to{clip-path:inset(-10% -10% -10% -10%);}}
+@keyframes vtc-chart-grow{from{opacity:0;transform:scale(0.85);}to{opacity:1;transform:none;}}
 ` +
 /* Tooltip - positioned by the chart, so it needs no layout of its own beyond staying on top */
 `
@@ -319,20 +338,30 @@ transition:opacity 0.1s ease-out;
 .vtc-chart-tooltip-value{font-variant-numeric:tabular-nums;}
 @media (prefers-reduced-motion: reduce){
 .vtc-chart-bar,.vtc-chart-arc,.vtc-chart-mark,.vtc-chart-tooltip{transition:none;}
+.vtc-chart-enter .vtc-chart-marks,.vtc-chart-enter .vtc-chart-marks-radial{animation:none;}
 }
 `, "vtc/Chart", "base")
 }
 
 /** Builds the legend row; returns undefined when there is nothing worth labelling */
-export function buildLegend(entries: {label: string, color: string}[]): HTMLDivElement | undefined {
+export function buildLegend(
+    entries: {label: string, color: string}[],
+    onToggle: ((index: number) => void) | undefined
+): HTMLDivElement | undefined {
     if (entries.length === 0) {
         return undefined
     }
     const legend = document.createElement("div")
     legend.className = "vtc-chart-legend"
-    for (const entry of entries) {
-        const item = document.createElement("span")
+    entries.forEach((entry, index) => {
+        // A real button when it does something, so keyboard and screen reader support come with it
+        const item = document.createElement(onToggle ? "button" : "span")
         item.className = "vtc-chart-legend-item"
+        if (onToggle) {
+            (item as HTMLButtonElement).type = "button"
+            item.classList.add("vtc-chart-legend-toggle")
+            item.addEventListener("click", () => onToggle(index))
+        }
         const swatch = document.createElement("span")
         swatch.className = "vtc-chart-legend-swatch"
         swatch.style.backgroundColor = entry.color
@@ -341,7 +370,7 @@ export function buildLegend(entries: {label: string, color: string}[]): HTMLDivE
         item.appendChild(swatch)
         item.appendChild(text)
         legend.appendChild(item)
-    }
+    })
     return legend
 }
 

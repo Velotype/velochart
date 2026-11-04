@@ -53,6 +53,11 @@ export class PieChart extends ChartFrame<PieChartAttrsType> {
         return this.chartAttrs.data.reduce((sum, slice) => sum + Math.max(0, slice.value), 0)
     }
 
+    /** What the drawn slices add up to, leaving out any the reader has turned off */
+    #shownTotal(): number {
+        return this.chartAttrs.data.reduce((sum, slice, i) => sum + (this.isEntryHidden(i) ? 0 : Math.max(0, slice.value)), 0)
+    }
+
     protected override isEmpty(): boolean {
         return this.chartAttrs.data.length === 0 || this.#total() <= 0
     }
@@ -77,7 +82,8 @@ export class PieChart extends ChartFrame<PieChartAttrsType> {
 
     protected override draw(svg: SVGElement, width: number, height: number): void {
         const attrs = this.chartAttrs
-        const total = this.#total()
+        const total = this.#shownTotal()
+        const marks = svgEl("g", {class: "vtc-chart-marks-radial"})
         const cx = width / 2
         const cy = height / 2
         const radius = Math.max(1, Math.min(width, height) / 2 - 4)
@@ -85,7 +91,7 @@ export class PieChart extends ChartFrame<PieChartAttrsType> {
 
         let angle = -Math.PI / 2
         attrs.data.forEach((slice, index) => {
-            const value = Math.max(0, slice.value)
+            const value = this.isEntryHidden(index) ? 0 : Math.max(0, slice.value)
             if (value <= 0) {
                 return
             }
@@ -111,9 +117,10 @@ export class PieChart extends ChartFrame<PieChartAttrsType> {
                 anchor: {left: tipX, right: tipX, y: cy + Math.sin(midAngle) * tipRadius},
                 detail: {label: slice.label, index, value: slice.value},
             })
-            svg.appendChild(path)
+            marks.appendChild(path)
             angle += sweep
         })
+        svg.appendChild(marks)
 
         if (innerRadius > 0 && attrs.centerLabel !== undefined) {
             const label = svgEl("text", {

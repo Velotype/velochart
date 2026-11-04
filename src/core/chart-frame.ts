@@ -46,6 +46,12 @@ export abstract class ChartFrame<AttrsType extends ChartBaseAttrsType> extends C
     #markOf = new WeakMap<EventTarget, ChartMark>()
     #activeMark: SVGElement | undefined
     #plotFrame = 0
+    #tweenFrame = 0
+    /** Entries the reader has turned off from the legend */
+    #hidden = new Set<number>()
+    /** What the legend currently shows, so a redraw that changes none of it keeps its buttons and their focus */
+    #legendKey = ""
+    #hasEntered = false
     protected tooltip: ChartTooltip
     protected chartAttrs: AttrsType
 
@@ -99,6 +105,8 @@ export abstract class ChartFrame<AttrsType extends ChartBaseAttrsType> extends C
         this.#observer = undefined
         cancelAnimationFrame(this.#plotFrame)
         this.#plotFrame = 0
+        cancelAnimationFrame(this.#tweenFrame)
+        this.#tweenFrame = 0
         // A later mount has to draw again, or a re-attached chart would stay as it was left
         this.#lastWidth = 0
     }
@@ -171,13 +179,89 @@ export abstract class ChartFrame<AttrsType extends ChartBaseAttrsType> extends C
         this.#activeMark = undefined
         this.tooltip.hide()
         this.draw(svg, width, height)
+        // Only the first drawing: replaying the entrance on every resize would make a chart flicker
+        // whenever its container changed size.
+        if (!this.#hasEntered) {
+            this.#hasEntered = true
+            if (attrs.animate ?? true) {
+                svg.classList.add("vtc-chart-enter")
+            }
+        }
         this.#svgHost.replaceChildren(svg)
         this.#svg = svg
         this.#drawingTop = this.#svgHost.offsetTop
 
+        this.#renderLegend()
+    }
+
+    #renderLegend(): void {
+        const attrs = this.chartAttrs
         const entries = attrs.hideLegend ? [] : this.legendEntries()
-        const legend = buildLegend(entries)
-        this.#legendHost.replaceChildren(...(legend ? [legend] : []))
+        const toggles = entries.length > 1 && (attrs.legendToggle ?? true)
+        const key = `${toggles}\u0001${entries.map(entry => `${entry.label}\u0000${entry.color}`).join("\u0002")}`
+        if (key !== this.#legendKey) {
+            this.#legendKey = key
+            const legend = buildLegend(entries, toggles ? (index) => this.#toggleEntry(index) : undefined)
+            this.#legendHost.replaceChildren(...(legend ? [legend] : []))
+        }
+        if (toggles) {
+            this.#legendHost.querySelectorAll(".vtc-chart-legend-item").forEach((item, index) => {
+                item.setAttribute("aria-pressed", String(!this.#hidden.has(index)))
+            })
+        }
+    }
+
+    #toggleEntry(index: number): void {
+        if (this.#hidden.has(index)) {
+            this.#hidden.delete(index)
+        } else {
+            this.#hidden.add(index)
+        }
+        this.entryToggled()
+        this.redrawNow()
+    }
+
+    /** Whether the reader has turned this legend entry off. An index into `legendEntries` */
+    protected isEntryHidden(index: number): boolean {
+        return this.#hidden.has(index)
+    }
+
+    /** Hides or shows an entry without redrawing, for a chart setting its starting state */
+    protected setEntryHidden(index: number, hidden: boolean): void {
+        if (hidden) {
+            this.#hidden.add(index)
+        } else {
+            this.#hidden.delete(index)
+        }
+    }
+
+    /** For a subclass that derives something from what is hidden: called before the redraw */
+    protected entryToggled(): void {
+        // Nothing to derive by default
+    }
+
+    /**
+     * Runs `step` from 0 to 1 over `duration` ms, redrawing the plot each frame, for a change of data.
+     * Reports only 1 when animation is off or the reader asked for reduced motion.
+     */
+    protected tween(duration: number, step: (progress: number) => void): void {
+        cancelAnimationFrame(this.#tweenFrame)
+        this.#tweenFrame = 0
+        const reduced = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false
+        if ((this.chartAttrs.animate ?? true) === false || reduced || this.#lastWidth <= 0) {
+            step(1)
+            return
+        }
+        const started = performance.now()
+        step(0)
+        const frame = (now: number) => {
+            const progress = Math.min(1, (now - started) / duration)
+            // An ease-out: quick to start, so the reader sees the change the moment they asked for it
+            step(1 - (1 - progress) * (1 - progress))
+            this.redrawPlot()
+            this.#tweenFrame = progress < 1 ? requestAnimationFrame(frame) : 0
+        }
+        this.#tweenFrame = requestAnimationFrame(frame)
     }
 
     #newSvg(width: number, height: number): SVGElement {

@@ -2,7 +2,7 @@ import { Component, getComponent, replaceElementWithRoot } from "@velotype/velot
 import type { EmptyAttrs } from "@velotype/velotype"
 
 import { setThemeOnSelector, Theme } from "@velotype/velodesign"
-import { BarChart, LineChart } from "../../src/index.ts"
+import { BarChart, BubbleChart, LineChart, MixedChart, PieChart, PolarAreaChart, RadarChart, ScatterChart } from "../../src/index.ts"
 import { TestModulePage } from "./module-page.tsx"
 
 /**
@@ -28,6 +28,13 @@ const negativeStack = [{label: "both", values: {gain: 10, loss: -5}}]
 const day = 24 * 60 * 60 * 1000
 const logTime = [0, 10, 20, 30].map((n, i) => ({x: new Date(Date.UTC(2026, 0, 1) + n * day), values: {requests: Math.pow(10, i + 1)}}))
 
+const months = [
+    {label: "Jan", values: {sales: 120, rate: 12, extra: 5}},
+    {label: "Feb", values: {sales: 150, rate: 18, extra: 7}},
+    {label: "Mar", values: {sales: 90, rate: 9, extra: 4}},
+    {label: "Apr", values: {sales: 200, rate: 24, extra: 6}},
+]
+
 const updating = getComponent<BarChart>(<BarChart data={[{label: "a", values: {v: 1}}]} series={[{key: "v"}]} height={120}/>)
 ;(globalThis as unknown as {updatingChart: BarChart}).updatingChart = updating
 
@@ -45,6 +52,28 @@ class FeaturesPage extends Component<EmptyAttrs> {
                 data={[{x: 10, values: {v: 3}}, {x: 1, values: {v: 1}}, {x: 2, values: {v: 2}}]}
                 series={[{key: "v"}]} height={140}/></div>
             <div id="updating-chart">{updating}</div>
+            <div id="mixed-chart"><MixedChart
+                data={months} series={[
+                    {key: "sales", label: "Sales", type: "bar"},
+                    {key: "rate", label: "Rate", type: "line", yAxis: "right", curve: "smooth"},
+                ]} yAxis={{title: "Sales"}} yAxisRight={{title: "Rate", format: (n) => `${n}%`}} height={200}/></div>
+            <div id="step-line"><LineChart data={months} series={[{key: "sales", curve: "step-after"}]} height={120}/></div>
+            <div id="smooth-line"><LineChart data={[{label: "a", values: {v: 0}}, {label: "b", values: {v: 0}}, {label: "c", values: {v: 10}}]} series={[{key: "v", curve: "smooth"}]} height={120} showDots/></div>
+            <div id="toggle-chart"><LineChart data={months} series={[{key: "sales"}, {key: "rate"}, {key: "extra", hidden: true}]} height={140}/></div>
+            <div id="click-chart"><BarChart data={negatives} series={[{key: "v"}]} height={120} onPointClick={(detail) => {
+                (globalThis as unknown as {lastClick: unknown}).lastClick = detail
+            }}/></div>
+            <div id="scatter-chart"><ScatterChart series={[
+                {key: "a", label: "A", points: [{x: 1, y: 2}, {x: 3, y: 5}]},
+                {key: "b", label: "B", points: [{x: 2, y: 8, label: "Outlier"}]},
+            ]} height={160}/></div>
+            <div id="bubble-chart"><BubbleChart series={[
+                {key: "a", points: [{x: 1, y: 2, size: 10}, {x: 3, y: 5, size: 40}]},
+            ]} height={160}/></div>
+            <div id="radar-chart"><RadarChart data={months} series={[{key: "sales"}, {key: "rate"}]} height={220}/></div>
+            <div id="polar-chart"><PolarAreaChart data={[{label: "a", value: 4}, {label: "b", value: 8}, {label: "c", value: 2}]} height={200}/></div>
+            <div id="toggle-pie"><PieChart data={[{label: "a", value: 1}, {label: "b", value: 1}]} height={140}/></div>
+            <div id="still-chart"><BarChart animate={false} data={negatives} series={[{key: "v"}]} height={100}/></div>
             <div id="titled-chart"><LineChart title="With a title" data={gaps} series={gapSeries} height={160}/></div>
         </div>
     }
