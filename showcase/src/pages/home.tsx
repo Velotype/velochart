@@ -2,7 +2,7 @@ import { Component, setStylesheet } from "@velotype/velotype"
 import type { EmptyAttrs } from "@velotype/velotype"
 
 import { Badge, Button, Card, Grid, Heading, History, I, Paragraph, Stack, Statistic, Text } from "@velotype/velodesign"
-import { componentDocs, groupedDocs } from "../data/docs.tsx"
+import { chartDocs, groupedDocs } from "../data/docs.tsx"
 import { bundleSize } from "../data/bundle-size.ts"
 import { categoryPageUrl } from "./category-page.tsx"
 import { categoryIconKey } from "../data/category-icons.ts"
@@ -33,22 +33,23 @@ border-block-end:1px solid var(--background-4);
         }
 
         const groups = groupedDocs()
+        const chartCategories = new Set(chartDocs.map(doc => doc.group)).size
 
         return <div>
             <section class="vtc-showcase-hero">
                 <Heading level={1}>velochart</Heading>
                 <Paragraph type="muted">A chart library for Velotype, drawn in SVG at the container's real pixel width and themed
-                    from the same CSS custom properties as velodesign - {componentDocs.length} charts
-                    across {groups.length} categories.</Paragraph>
+                    from the same CSS custom properties as velodesign - {chartDocs.length} charts
+                    across {chartCategories} categories, and the dashboards to put them in.</Paragraph>
                 <Stack justify="center" gap="lg">
-                    <Button type="primary" onClick={() => History.changeLocation(`/components/${componentDocs[0].slug}`)}>Browse charts</Button>
+                    <Button type="primary" onClick={() => History.changeLocation(`/components/${chartDocs[0].slug}`)}>Browse charts</Button>
                 </Stack>
             </section>
 
             <section class="vtc-showcase-stats">
                 <Stack justify="center" gap="xl" align="center">
-                    <Statistic title="Charts" value={componentDocs.length}/>
-                    <Statistic title="Categories" value={groups.length}/>
+                    <Statistic title="Charts" value={chartDocs.length}/>
+                    <Statistic title="Categories" value={chartCategories}/>
                     {/* Measured, not claimed: this page's own build task regenerates the figure first.
                         ownGzip, not gzip: the second has velotype folded in, and a consumer does not
                         pay that to velochart when velotype is already in their app */}

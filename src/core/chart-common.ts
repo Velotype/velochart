@@ -250,7 +250,7 @@ export function mountChartStyles(): void {
     mountStyles(
 `
 .vtc-chart{width:100%;box-sizing:border-box;display:flex;flex-direction:column;gap:0.5em;position:relative;}
-.vtc-chart-drawing{position:relative;}
+.vtc-chart-drawing{position:relative;-webkit-user-select:none;user-select:none;}
 .vtc-chart-drawing:focus-visible{outline:2px solid var(--primary-7);outline-offset:2px;border-radius:0.25rem;}
 .vtc-chart-svg{display:block;width:100%;overflow:visible;}
 ` +
@@ -264,6 +264,7 @@ export function mountChartStyles(): void {
 .vtc-sparkline{display:inline-block;vertical-align:middle;line-height:0;}
 .vtc-sparkline .vtc-chart-svg{width:auto;}
 .vtc-chart-gridline{stroke:var(--background-3);stroke-width:1;shape-rendering:crispedges;}
+.vtc-chart-cursor{stroke:var(--background-7);stroke-width:1;shape-rendering:crispedges;pointer-events:none;}
 .vtc-chart-axis{stroke:var(--background-5);stroke-width:1;shape-rendering:crispedges;}
 ` +
 /* em, not px: this is the only place in the package that would otherwise hardcode a text size,
@@ -286,6 +287,8 @@ export function mountChartStyles(): void {
 .vtc-chart-tick{fill:var(--background-7);font-size:0.85em;font-weight:500;font-family:inherit;}
 .vtc-chart-tick-y{text-anchor:end;dominant-baseline:middle;}
 .vtc-chart-tick-x{text-anchor:middle;}
+.vtc-chart-tick-end{text-anchor:end;}
+.vtc-chart-tick-start{text-anchor:start;}
 ` +
 /* Lines keep their width whatever the viewBox does, so a wide chart doesn't draw hairlines */
 `
@@ -346,6 +349,7 @@ color:var(--background-6);
 font-size:2em;
 line-height:1;
 }
+.vtc-chart-empty[hidden]{display:none;}
 ` +
 /* Legend */
 `

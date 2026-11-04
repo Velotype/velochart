@@ -129,6 +129,344 @@ describe('chart rendering', () => {
         })
     }
 
+    /** Polls until an in-page check holds */
+    const waitFor = async (probe: () => Promise<unknown>, timeoutMs = 3000) => {
+        const started = Date.now()
+        while (Date.now() - started < timeoutMs) {
+            if (await probe()) {
+                return
+            }
+            await new Promise(resolve => setTimeout(resolve, 20))
+        }
+        fail(`ERROR: timed out after ${timeoutMs}ms`)
+    }
+
+    /** What the window tests read back: every chart's view, and the window's own range */
+    type WindowGlobals = {
+        shared: {getRange: () => {from: number, to: number}, setRange: (from: number, to: number) => void, setLast: (span: number) => void, setLive: (live: boolean) => void, isLive: () => boolean, shift: (direction: number) => void, zoomOut: () => void}
+        lineA: {getView: () => {xMin: number, xMax: number} | undefined, update: (attrs: unknown) => void}
+        lineB: {getView: () => {xMin: number, xMax: number} | undefined}
+        candle: {getView: () => {xMin: number, xMax: number} | undefined}
+        categories: {getView: () => unknown}
+        clock: {now: number}
+    }
+    const settleFrames = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+
+    itWrap("a time window moves every chart on it at once, and none that has no time axis", "time-window", "#tw-line-a svg", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const g = globalThis as unknown as WindowGlobals
+            const before = g.lineA.getView()
+            const {from} = g.shared.getRange()
+            g.shared.setRange(from + 60_000, from + 3_660_000)
+            return {
+                before: before !== undefined,
+                a: g.lineA.getView(), b: g.lineB.getView(), candle: g.candle.getView(),
+                categories: g.categories.getView() ?? null,
+                range: g.shared.getRange(),
+                gauge: document.querySelector("#tw-gauge .vtc-gauge-value, #tw-gauge text")?.textContent !== undefined,
+            }
+        })
+        assertEquals(state.before, true)
+        assertEquals(state.a?.xMin, state.range.from)
+        assertEquals(state.a?.xMax, state.range.to)
+        assertEquals(state.b?.xMin, state.range.from)
+        assertEquals(state.candle?.xMax, state.range.to)
+        assertEquals(state.categories, null)
+    })
+
+    itWrap("a window past the data stays there, with its axis, rather than snapping back", "time-window", "#tw-line-a svg", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const g = globalThis as unknown as WindowGlobals
+            const far = Date.UTC(2030, 0, 1)
+            g.shared.setRange(far, far + 3_600_000)
+            g.lineA.update({series: [{key: "v"}]})
+            return {xMin: g.lineA.getView()?.xMin, far}
+        })
+        await settleFrames()
+        assertEquals(state.xMin, state.far)
+        const ticks = await page.evaluate(() => document.querySelectorAll("#tw-line-a text").length)
+        assertEquals(ticks > 0, true)
+    })
+
+    itWrap("dragging across one chart sets the window for all of them, and a double click steps out", "time-window", "#tw-line-a svg", async (_selection: ElementHandle) => {
+        await settleFrames()
+        const box = await page.evaluate(() => {
+            const r = document.querySelector("#tw-line-a svg")!.getBoundingClientRect()
+            const fire = (type: string, x: number, buttons: number) => {
+                document.querySelector("#tw-line-a svg")!.dispatchEvent(new PointerEvent(type, {bubbles: true, pointerId: 1, button: 0, buttons, clientX: r.left + x * r.width, clientY: r.top + r.height / 2}))
+            }
+            const g = globalThis as unknown as WindowGlobals
+            const before = g.shared.getRange()
+            g.shared.setLive(true)
+            fire("pointerdown", 0.3, 1)
+            fire("pointermove", 0.6, 1)
+            fire("pointerup", 0.6, 0)
+            const after = g.shared.getRange()
+            const follows = g.lineB.getView()
+            const wasLive = g.shared.isLive()
+            document.querySelector("#tw-line-a svg")!.dispatchEvent(new MouseEvent("dblclick", {bubbles: true}))
+            return {before: before.to - before.from, after: after.to - after.from, afterFrom: after.from, followsFrom: follows?.xMin, wasLive, out: g.shared.getRange().to - g.shared.getRange().from}
+        })
+        assertEquals(box.after > 0 && box.after < box.before, true)
+        assertEquals(box.followsFrom, box.afterFrom)
+        // A reader picking a range has stopped watching the latest
+        assertEquals(box.wasLive, false)
+        assertEquals(box.out, box.after * 2)
+    })
+
+    itWrap("a live window follows the clock, and its clock stops once nothing listens", "time-window", "#tw-line-a svg", async (_selection: ElementHandle) => {
+        type LiveGlobals = WindowGlobals & {lonelyTicks: {count: number}, listenToLonely: () => () => void, stopLonely: () => void}
+        await page.evaluate(() => {
+            const g = globalThis as unknown as LiveGlobals
+            g.shared.setLast(3_600_000)
+            g.shared.setLive(true)
+            g.clock.now += 1000
+            g.stopLonely = g.listenToLonely()
+        })
+        await waitFor(() => page.evaluate(() => {
+            const g = globalThis as unknown as LiveGlobals
+            // The clock moving is what makes each tick an announcement
+            g.clock.now += 1000
+            return g.lonelyTicks.count >= 2 && g.shared.getRange().to >= g.clock.now - 1000
+        }))
+        const span = await page.evaluate(() => {
+            const g = globalThis as unknown as LiveGlobals
+            g.stopLonely()
+            return {span: g.shared.getRange().to - g.shared.getRange().from, ticks: g.lonelyTicks.count}
+        })
+        assertEquals(span.span, 3_600_000)
+        await page.evaluate(() => {
+            (globalThis as unknown as WindowGlobals).clock.now += 1000
+        })
+        await new Promise(resolve => setTimeout(resolve, 120))
+        const after = await page.evaluate(() => (globalThis as unknown as LiveGlobals).lonelyTicks.count)
+        assertEquals(after, span.ticks)
+    })
+
+    itWrap("a chart waiting on its first data loses its empty state when the data comes", "time-window", "#tw-line-a svg", async (_selection: ElementHandle) => {
+        const shownBefore = await page.evaluate(() => getComputedStyle(document.querySelector("#tw-from-empty .vtc-chart-empty") as HTMLElement).display)
+        assertEquals(shownBefore, "flex")
+        const after = await page.evaluate(() => {
+            const g = globalThis as unknown as {fromEmpty: {update: (attrs: unknown) => void}}
+            g.fromEmpty.update({data: [{x: Date.UTC(2026, 0, 1, 6), values: {v: 1}}, {x: Date.UTC(2026, 0, 1, 7), values: {v: 2}}]})
+            return getComputedStyle(document.querySelector("#tw-from-empty .vtc-chart-empty") as HTMLElement).display
+        })
+        assertEquals(after, "none")
+    })
+
+    itWrap("moving the window puts away a tooltip reading the old range, and a live tick keeps it", "time-window", "#tw-line-a svg", async (_selection: ElementHandle) => {
+        await settleFrames()
+        const hover = () => page.evaluate(() => {
+            const svg = document.querySelector("#tw-line-a svg") as SVGElement
+            const r = svg.getBoundingClientRect()
+            svg.querySelector(".vtc-chart-hit")!.dispatchEvent(new PointerEvent("pointermove", {bubbles: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2}))
+        })
+        const shown = (id: string) => page.evaluate((target: string) => document.querySelector(`#${target} .vtc-chart-tooltip`)!.classList.contains("vtc-chart-tooltip-visible"), {args: [id]})
+        await hover()
+        await settleFrames()
+        assertEquals(await shown("tw-line-b"), true)
+        await page.evaluate(() => {
+            const g = globalThis as unknown as WindowGlobals
+            const {from, to} = g.shared.getRange()
+            g.shared.setRange(from - 60_000, to - 60_000)
+        })
+        await settleFrames()
+        assertEquals(await shown("tw-line-b"), false)
+        await page.evaluate(() => {
+            (globalThis as unknown as WindowGlobals).shared.setLive(true)
+        })
+        await settleFrames()
+        await hover()
+        await settleFrames()
+        await page.evaluate(() => {
+            (globalThis as unknown as WindowGlobals).clock.now += 1000
+        })
+        // Past a tick and the drawing it caused
+        await new Promise(resolve => setTimeout(resolve, 120))
+        await settleFrames()
+        assertEquals(await shown("tw-line-b"), true)
+        const line = await page.evaluate(() => document.querySelectorAll('#tw-line-b line.vtc-chart-cursor[visibility="visible"]').length)
+        assertEquals(line, 1)
+    })
+
+    itWrap("settled listeners hear about a burst of changes once", "time-window", "#tw-line-a svg", async (_selection: ElementHandle) => {
+        const before = await page.evaluate(() => {
+            const g = globalThis as unknown as WindowGlobals & {changes: {all: number, settled: number}}
+            const start = g.changes.all
+            const {from, to} = g.shared.getRange()
+            for (let i = 1; i <= 20; i++) {
+                g.shared.setRange(from + i * 1000, to + i * 1000)
+            }
+            return {all: g.changes.all - start, settled: g.changes.settled}
+        })
+        assertEquals(before.all, 20)
+        await new Promise(resolve => setTimeout(resolve, 350))
+        const after = await page.evaluate(() => (globalThis as unknown as {changes: {settled: number}}).changes.settled)
+        assertEquals(after - before.settled, 1)
+    })
+
+    itWrap("moving forward stops at now, and going back moves by a whole span", "time-window", "#tw-line-a svg", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const g = globalThis as unknown as WindowGlobals
+            g.shared.setLast(3_600_000)
+            const atNow = g.shared.getRange()
+            g.shared.shift(1)
+            const pushed = g.shared.getRange()
+            g.shared.shift(-1)
+            const back = g.shared.getRange()
+            g.shared.zoomOut()
+            return {now: g.clock.now, atNow, pushed, back, zoomed: g.shared.getRange()}
+        })
+        assertEquals(state.pushed, state.atNow)
+        assertEquals(state.back.to, state.atNow.to - 3_600_000)
+        assertEquals(state.zoomed.to - state.zoomed.from, 7_200_000)
+    })
+
+    itWrap("the control's list, buttons and fields drive the window, and it follows the window back", "time-window", "#tw-control select", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(async () => {
+            const g = globalThis as unknown as WindowGlobals
+            const root = document.getElementById("tw-control") as HTMLElement
+            const select = root.querySelector("select") as HTMLSelectElement
+            select.value = "900000"
+            select.dispatchEvent(new Event("change"))
+            const picked = g.shared.getRange()
+            const buttons = root.querySelectorAll("button")
+            ;(buttons[0] as HTMLButtonElement).click()
+            const backed = g.shared.getRange()
+            const shownAfterBack = select.selectedOptions[0].textContent
+            g.shared.setRange(Date.UTC(2026, 0, 1, 1, 0), Date.UTC(2026, 0, 1, 3, 0))
+            const inputs = root.querySelectorAll("input")
+            const shown = [inputs[0].value, inputs[1].value]
+            inputs[0].value = "2026-01-01T02:00"
+            inputs[0].dispatchEvent(new Event("input"))
+            const beforePause = g.shared.getRange().from
+            await new Promise(resolve => setTimeout(resolve, 320))
+            const typed = g.shared.getRange().from
+            inputs[0].value = "2026-01-01T09:00"
+            inputs[0].dispatchEvent(new Event("input"))
+            await new Promise(resolve => setTimeout(resolve, 320))
+            const backwards = g.shared.getRange().from
+            const live = root.querySelector(".vtc-time-window-live") as HTMLButtonElement
+            live.click()
+            return {pickedSpan: picked.to - picked.from, backedSpan: backed.to - picked.to, shownAfterBack, shown, beforePause, typed, backwards, pressed: live.getAttribute("aria-pressed"), isLive: g.shared.isLive()}
+        })
+        assertEquals(state.pickedSpan, 900_000)
+        assertEquals(state.backedSpan, -900_000)
+        assertEquals(state.shownAfterBack !== "", true)
+        assertEquals(state.shown, ["2026-01-01T01:00", "2026-01-01T03:00"])
+        assertEquals(state.beforePause, Date.UTC(2026, 0, 1, 1, 0))
+        assertEquals(state.typed, Date.UTC(2026, 0, 1, 2, 0))
+        // Back to front waits for the reader to finish
+        assertEquals(state.backwards, state.typed)
+        assertEquals(state.pressed, "true")
+        assertEquals(state.isLive, true)
+    })
+
+    itWrap("a double click selects no text on a chart", "time-window", "#tw-line-a svg", async (_selection: ElementHandle) => {
+        await settleFrames()
+        const spots = await page.evaluate(() => {
+            const svg = document.querySelector("#tw-line-a svg") as SVGElement
+            const label = Array.from(svg.querySelectorAll("text")).find(text => (text.textContent ?? "").length > 0) as SVGTextElement
+            const at = label.getBoundingClientRect()
+            const whole = svg.getBoundingClientRect()
+            return [{x: at.left + at.width / 2, y: at.top + at.height / 2}, {x: whole.left + whole.width / 2, y: whole.top + whole.height / 2}]
+        })
+        for (const spot of spots) {
+            await page.mouse.click(spot.x, spot.y, {count: 2})
+            const selected = await page.evaluate(() => getSelection()?.toString() ?? "")
+            assertEquals(selected, "")
+        }
+    })
+
+    itWrap("the hover cursor stands out from the grid, so a tick under it can't hide it", "time-window", "#tw-line-a svg", async (_selection: ElementHandle) => {
+        await settleFrames()
+        const stroke = await page.evaluate(() => {
+            const svg = document.querySelector("#tw-line-a svg") as SVGElement
+            const cursor = svg.querySelector("line.vtc-chart-cursor")
+            const grid = svg.querySelector("line.vtc-chart-gridline")
+            return {cursor: cursor ? getComputedStyle(cursor).stroke : null, grid: grid ? getComputedStyle(grid).stroke : null}
+        })
+        assertEquals(stroke.cursor !== null, true)
+        assertEquals(stroke.cursor !== stroke.grid, true)
+    })
+
+    itWrap("a time axis and its tooltip read down to the millisecond", "time-window", "#tw-fine svg", async (_selection: ElementHandle) => {
+        await settleFrames()
+        const state = await page.evaluate(() => {
+            const svg = document.querySelector("#tw-fine svg") as SVGElement
+            const ticks = Array.from(svg.querySelectorAll("text")).map(text => text.textContent ?? "").filter(text => /\.\d{3}/.test(text))
+            const r = svg.getBoundingClientRect()
+            svg.querySelector(".vtc-chart-hit")!.dispatchEvent(new PointerEvent("pointermove", {bubbles: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2}))
+            const inside = Array.from(svg.querySelectorAll("text")).every(text => text.getBoundingClientRect().right <= r.right + 1 && text.getBoundingClientRect().left >= r.left - 1)
+            return {ticks, inside, title: document.querySelector("#tw-fine .vtc-chart-tooltip-title")?.textContent ?? ""}
+        })
+        assertEquals(state.ticks.length > 1, true)
+        assertEquals(state.inside, true)
+        // Spaced under a second, they would read as one time over and over without their milliseconds
+        assertEquals(new Set(state.ticks).size, state.ticks.length)
+        assertEquals(/\.\d{3}/.test(state.title), true)
+    })
+
+    itWrap("the control's fields hold a range to the millisecond, and an end left alone stays exact", "time-window", "#tw-fine-control input", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(async () => {
+            const g = globalThis as unknown as {fineWindow: {getRange: () => {from: number, to: number}, setRange: (from: number, to: number) => void}}
+            const inputs = document.querySelectorAll("#tw-fine-control input") as NodeListOf<HTMLInputElement>
+            const shown = inputs[0].value
+            const step = inputs[0].step
+            const toBefore = g.fineWindow.getRange().to
+            inputs[0].value = "2026-01-01T00:00:01.250"
+            inputs[0].dispatchEvent(new Event("input"))
+            await new Promise(resolve => setTimeout(resolve, 320))
+            const typed = g.fineWindow.getRange()
+            const coarse = g.fineWindow as unknown as {setRange: (from: number, to: number) => void}
+            coarse.setRange(Date.UTC(2026, 0, 1), Date.UTC(2026, 0, 1, 6, 0, 12, 345))
+            const wide = [inputs[0].value, inputs[1].value, inputs[0].step]
+            inputs[0].value = "2026-01-01T01:00"
+            inputs[0].dispatchEvent(new Event("input"))
+            await new Promise(resolve => setTimeout(resolve, 320))
+            const always = (document.querySelector("#tw-always input") as HTMLInputElement)
+            return {shown, step, toBefore, typed, wide, keptTo: g.fineWindow.getRange().to, always: [always.step, always.value]}
+        })
+        assertEquals(state.shown, "2026-01-01T00:00:01.123")
+        assertEquals(state.step, "0.001")
+        assertEquals(state.typed, {from: Date.UTC(2026, 0, 1, 0, 0, 1, 250), to: state.toBefore})
+        // A wide range shows whole minutes, and typing the other end doesn't round this one
+        assertEquals(state.wide, ["2026-01-01T00:00", "2026-01-01T06:00", "60"])
+        assertEquals(state.keptTo, Date.UTC(2026, 0, 1, 6, 0, 12, 345))
+        assertEquals(state.always[0], "0.001")
+        // A field's value leaves out zero seconds. The step is what makes it show them
+        assertEquals(state.always[1], "2026-01-01T00:00")
+    })
+
+    itWrap("the control wraps to fit a narrow page", "time-window", "#tw-control select", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const host = document.getElementById("tw-control") as HTMLElement
+            host.style.width = "320px"
+            const parts = Array.from(host.querySelectorAll("button,select,input"))
+            const right = host.getBoundingClientRect().right
+            return parts.every(part => part.getBoundingClientRect().right <= right + 1)
+        })
+        assertEquals(state, true)
+    })
+
+    itWrap("the control assumes no language: names and preset words come from the consumer or the browser", "time-window", "#tw-labelled select", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const named = document.getElementById("tw-labelled") as HTMLElement
+            const plain = document.getElementById("tw-utc") as HTMLElement
+            return {
+                names: Array.from(named.querySelectorAll("button,select,input")).map(el => el.getAttribute("aria-label")),
+                options: Array.from(named.querySelectorAll("option")).filter(o => !o.hidden).map(o => o.textContent),
+                expected: new Intl.NumberFormat(undefined, {style: "unit", unit: "hour", unitDisplay: "short"}).format(2),
+                plainNames: Array.from(plain.querySelectorAll("[aria-label]")).length,
+                plainLive: plain.querySelector(".vtc-time-window-live") === null,
+            }
+        })
+        assertEquals(state.names, ["prev-name", "next-name", "list-name", "from-name", "to-name", "out-name", "live-name"])
+        assertEquals(state.options, ["Une heure", state.expected])
+        assertEquals(state.plainNames, 0)
+        assertEquals(state.plainLive, true)
+    })
+
     itWrap("charts draw a line per series, with axis ticks and a legend", "charts", "#default-line-chart", async (_selection: ElementHandle) => {
         const state = await page.evaluate(() => {
             const root = document.getElementById("default-line-chart") as HTMLElement

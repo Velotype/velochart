@@ -17,7 +17,7 @@ export type ServerContextMetadata = {
 }
 
 /** Every gallery module the server serves */
-export const setOfModules: string[] = ['charts','features','large','more-charts']
+export const setOfModules: string[] = ['charts','features','large','more-charts','time-window']
 
 /**
  * A gallery page. Every page runs under a strict Trusted Types policy, so any test that reaches

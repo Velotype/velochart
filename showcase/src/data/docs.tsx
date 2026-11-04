@@ -3,8 +3,9 @@ import type { RenderableElements } from "@velotype/velotype"
 import { Stack, Text } from "@velotype/velodesign"
 import {
     AreaChart, BarChart, BoxPlotChart, BubbleChart, CalendarHeatmap, CandlestickChart, FunnelChart, Gauge, Heatmap, HistogramChart,
-    LineChart, MixedChart, PieChart, PolarAreaChart, RadarChart, SankeyChart, ScatterChart, Sparkline, SunburstChart, Treemap, WaterfallChart,
+    LineChart, MixedChart, PieChart, PolarAreaChart, RadarChart, SankeyChart, ScatterChart, Sparkline, SunburstChart, TimeWindow, TimeWindowControl, Treemap, WaterfallChart,
 } from "@velotype/velochart"
+import { LiveDashboard, QueryDashboard, ServiceOverviewDashboard } from "./dashboards.tsx"
 
 /**
  * Everything the showcase says about each chart: one list of names and groups, and the descriptions,
@@ -253,6 +254,7 @@ const axesAttrs: AttrDoc[] = [
     {name: "annotations", type: "ChartAnnotationType[]", description: "Lines, bands and labelled points drawn on the plot."},
     {name: "crosshair", type: "boolean", defaultValue: "false", description: "Follows the pointer with lines to the axes and reads their values off there."},
     {name: "syncGroup", type: "string", description: "Charts sharing this name move their cursors together and zoom together."},
+    {name: "timeWindow", type: "TimeWindow", description: "Shows the range this window is on and sends a reader's zoom and pan to it, so every chart on it moves together. Dragging selects a range, and hover cursors are shared. Needs a time or numeric x axis."},
     {name: "zoom", type: '"x" | "y" | "xy"', description: "Lets a reader zoom and pan. Drag pans, ctrl or cmd and the wheel zooms, a pinch zooms, a double click resets, and the keyboard has + - 0."},
     {name: "wheelZoom", type: '"modifier" | "always"', defaultValue: "modifier", description: "Whether the wheel needs ctrl or cmd. \"always\" takes every scroll over the chart, which traps a reader scrolling down the page."},
     {name: "onZoom", type: "(view: ChartViewType | undefined) => void", description: "Called whenever the view changes."},
@@ -718,7 +720,7 @@ function slugify(name: string): string {
     return name.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase()
 }
 
-export const componentDocs: ComponentDoc[] = Object.keys(chartGroups).map(name => ({
+export const chartDocs: ComponentDoc[] = Object.keys(chartGroups).map(name => ({
     name,
     group: chartGroups[name],
     slug: slugify(name),
@@ -731,8 +733,145 @@ export const componentDocs: ComponentDoc[] = Object.keys(chartGroups).map(name =
     examples: examplesByName[name] ?? [],
 }))
 
+const windowDays: {x: number, values: Record<string, number>}[] = Array.from({length: 96}, (_, i) => ({
+    x: Date.now() - (96 - i) * 900_000,
+    values: {requests: 50 + 30 * Math.sin(i / 8) + (i * 7) % 11, errors: 3 + (i * 5) % 7},
+}))
+
+const dashboardDocs: ComponentDoc[] = [
+    {
+        name: "TimeWindowControl",
+        group: "Dashboard",
+        slug: "time-window-control",
+        description: "One control for the time range of a whole page. Give every chart the same TimeWindow, and the control, a drag on any chart and a zoom on any chart all move them together.",
+        kind: "component",
+        attrs: [
+            {name: "timeWindow", type: "TimeWindow", required: true, description: "The window this controls, which the charts on the page share."},
+            {name: "presets", type: "TimeWindowPresetType[]", defaultValue: "5 and 15 min, 1 and 6 hr, 1 and 7 days", description: "The ranges to offer."},
+            {name: "utc", type: "boolean", defaultValue: "false", description: "Reads and writes the times in UTC. Match the charts' xAxis.utc."},
+            {name: "hideLive", type: "boolean", defaultValue: "false", description: "Leaves out the button that follows the clock."},
+            {name: "precision", type: '"auto" | "minute" | "second" | "millisecond"', defaultValue: "auto", description: "How finely the two times read and can be typed. auto follows the range: milliseconds under a minute, seconds under an hour, and whole minutes above that."},
+            {name: "labels", type: "TimeWindowLabelsType", description: "What assistive technology calls each part. None has a default, so none assumes a language."},
+        ],
+        methods: [
+            {name: "new TimeWindow(options?)", description: "Makes a window, on the last hour unless options say otherwise. Takes span, range, live, refreshMs and now. This and the rest here are the window's, not the control's."},
+            {name: "getRange() / getSpan() / isLive() / now()", description: "Where the window is, and the time on its clock."},
+            {name: "contains(time)", description: "Whether a moment is in the range, for filtering what a panel with no time axis shows."},
+            {name: "setRange(from, to)", description: "Looks at a fixed range, and stops following the clock."},
+            {name: "setLast(span)", description: "Looks at the latest span milliseconds, still following the clock if it was."},
+            {name: "shift(direction)", description: "Moves back (-1) or forward (1) by a whole span. Moving forward stops at now."},
+            {name: "zoomOut(factor?)", description: "Widens the range around its middle, doubling it by default."},
+            {name: "setLive(live)", description: "Starts or stops following the clock."},
+            {name: "subscribe(listener)", description: "Calls listener on every change, up to display rate during a drag. For redrawing. Returns the way to stop."},
+            {name: "subscribeSettled(listener)", description: "Calls listener once the range has stopped changing. For fetching and for adding things up. Returns the way to stop."},
+        ],
+        types: [
+            {name: "TimeWindowOptions", description: "How a TimeWindow starts.", fields: [
+                {name: "span", type: "number", defaultValue: "one hour", description: "Starts on the last this many milliseconds."},
+                {name: "range", type: "{from: number | Date, to: number | Date}", description: "Starts on a fixed range instead."},
+                {name: "live", type: "boolean", defaultValue: "false", description: "Starts following the clock."},
+                {name: "refreshMs", type: "number", defaultValue: "5000", description: "How often a live window moves."},
+                {name: "now", type: "() => number", defaultValue: "Date.now", description: "The clock, for anything that needs another one."},
+            ]},
+            {name: "TimeWindowPresetType", description: "One choice in the list of ranges.", fields: [
+                {name: "span", type: "number", required: true, description: "How far back it looks, in milliseconds."},
+                {name: "label", type: "string", defaultValue: "the span, worded by the browser's language", description: "Its name in the list."},
+            ]},
+            {name: "TimeWindowLabelsType", description: "What assistive technology calls each part of the control. live is also shown beside its dot.", fields: [
+                {name: "previous, next, zoomOut, live, presets, from, to", type: "string", description: "One name for each."},
+            ]},
+        ],
+        examples: [{
+            label: "Two charts on one window",
+            node: () => {
+                const timeWindow = new TimeWindow({span: 12 * 3_600_000})
+                return <Stack direction="column" gap="md" style={{width: "100%", minWidth: "0"}}>
+                    <TimeWindowControl timeWindow={timeWindow} labels={{previous: "Earlier", next: "Later", zoomOut: "Zoom out", live: "Live", presets: "Time range", from: "From", to: "To"}}/>
+                    <LineChart height={150} timeWindow={timeWindow} animate={false} data={windowDays} series={[{key: "requests", label: "Requests"}]} xAxis={{type: "time"}}/>
+                    <BarChart height={150} hover="index" timeWindow={timeWindow} animate={false} data={windowDays} series={[{key: "errors", label: "Errors", color: "var(--warning)"}]} xAxis={{type: "time"}}/>
+                </Stack>
+            },
+            code: `const timeWindow = new TimeWindow({span: 12 * HOUR})
+
+<TimeWindowControl timeWindow={timeWindow} labels={{previous: "Earlier", next: "Later", ...}}/>
+<LineChart timeWindow={timeWindow} data={points} series={[{key: "requests"}]} xAxis={{type: "time"}}/>
+<BarChart timeWindow={timeWindow} data={points} series={[{key: "errors"}]} xAxis={{type: "time"}}/>`,
+        }],
+    },
+    {
+        name: "Service overview",
+        group: "Dashboard",
+        slug: "service-overview-dashboard",
+        description: "Data already on the page. Every chart holds a week and the window picks what is in view, so moving it costs a redraw and no request. Drag across any chart to look closer at the incident after the v2.4 deploy, and double click to step back out.",
+        kind: "component",
+        attrs: [],
+        examples: [{
+            label: "Requests, latency, errors and saturation",
+            node: () => <ServiceOverviewDashboard/>,
+            code: `const timeWindow = new TimeWindow({span: 6 * HOUR})
+
+// Charts with a time axis follow it by themselves, at display rate
+<TimeWindowControl timeWindow={timeWindow} labels={labels}/>
+<AreaChart timeWindow={timeWindow} data={week} series={requests} stacked xAxis={{type: "time"}}/>
+<LineChart timeWindow={timeWindow} data={week} series={latency} xAxis={{type: "time"}}/>
+
+// Anything else adds up what is in view, once it stops moving
+timeWindow.subscribeSettled(() => {
+    const inView = week.filter(row => timeWindow.contains(row.x))
+    availability.update({value: availabilityOf(inView)})
+    statuses.update({data: statusesOf(inView)})
+})`,
+        }],
+    },
+    {
+        name: "Live",
+        group: "Dashboard",
+        slug: "live-dashboard",
+        description: "A feed appending every second, with the window following the clock. Stop it with the button, or by dragging a range on a chart, to hold the view still for a look while the feed carries on behind it.",
+        kind: "component",
+        attrs: [],
+        examples: [{
+            label: "A host, updating every second",
+            node: () => <LiveDashboard/>,
+            code: `const timeWindow = new TimeWindow({span: 5 * MINUTE, live: true, refreshMs: SECOND})
+
+<TimeWindowControl timeWindow={timeWindow} labels={labels}/>
+<LineChart timeWindow={timeWindow} data={history} series={[{key: "cpu"}]} xAxis={{type: "time"}}/>
+
+// The feed and the window are separate: one brings data, the other picks what is in view
+socket.onmessage = (message) => cpu.appendData(toPoints(message), {maxPoints: 7200})`,
+        }],
+    },
+    {
+        name: "Query per window",
+        group: "Dashboard",
+        slug: "query-dashboard",
+        description: "Data on a server. The page asks for each range it settles on, rolled up to suit the span, and a slow reply to an old range can't paint over a newer one. Change the range and watch the rollup follow it.",
+        kind: "component",
+        attrs: [],
+        examples: [{
+            label: "A backend asked for each range",
+            node: () => <QueryDashboard/>,
+            code: `const timeWindow = new TimeWindow({span: 6 * HOUR})
+let latest = 0
+
+// Settled, so that a drag across a chart costs one request rather than hundreds
+timeWindow.subscribeSettled(async (range) => {
+    const request = ++latest
+    const points = await fetchMetrics(range, stepFor(range))
+    if (request === latest) {
+        latency.update({data: points})
+        throughput.update({data: points})
+    }
+})`,
+        }],
+    },
+]
+
+export const componentDocs: ComponentDoc[] = [...chartDocs, ...dashboardDocs]
+
 /** Display order for sidebar/nav groups */
-export const groupOrder = ["Cartesian", "Radial", "Matrix", "Hierarchy", "Flow", "Inline"]
+export const groupOrder = ["Dashboard", "Cartesian", "Radial", "Matrix", "Hierarchy", "Flow", "Inline"]
 
 /** `componentDocs`, bucketed by group and ordered per `groupOrder` */
 export function groupedDocs(): {group: string, docs: ComponentDoc[]}[] {

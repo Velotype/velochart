@@ -18,6 +18,7 @@ file documents what every chart here follows, so a new chart looks and behaves l
   | `hierarchy/` | Nested parts of a whole: Treemap, SunburstChart, on `tree.ts` |
   | `flow/` | Amounts moving through stages: FunnelChart, SankeyChart |
   | `inline/` | Sized to sit in a line of text: Sparkline |
+  | `dashboard/` | What a page of charts shares: `time-window.ts`, `time-window-control.ts`. Not charts, so left out of the showcase's chart counts |
   | `core/` | **Not a category.** `chart-common.ts` (palette, attrs, legend, tooltip, stylesheet), `chart-frame.ts` (sizing, marks, keyboard, export), `scale.ts`, `downsample.ts`, `patterns.ts`, `export.ts`, `styles.ts` (the cascade layers), `velotype.ts` (the barrel) |
 
 - `src/index.ts` - the only public entrypoint, and the only file at the root of `src/`. A chart's
@@ -70,6 +71,13 @@ which is what lets a chart hold a few hundred thousand of them, and **never spre
 band is one unit wide, and zooming categories is the same arithmetic as zooming anything else. A view is
 kept in domain units and zoom works by inverting pixels through the current scale, which is what makes
 it right on a log axis without a special case.
+
+**A `TimeWindow` is the one owner of x on the charts given it.** A chart takes its range from the window
+at every drawing, and a reader's zoom, pan or drag goes to the window and comes back as a redraw, so
+charts can't disagree. It may look past the data, because an empty stretch of time is a true answer to
+what the page asked: only the range slider stays inside the data. Its clock runs only while something
+listens. `subscribe` is at display rate for redrawing, and `subscribeSettled` waits for a pause, for a
+query or for anything that adds rows up.
 
 **The wheel doesn't zoom without ctrl or cmd**, unless `wheelZoom: "always"` asks for it. Taking every
 scroll over a chart traps a reader scrolling down the page. A trackpad pinch arrives with `ctrlKey` set,
