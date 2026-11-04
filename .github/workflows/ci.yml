@@ -57,6 +57,11 @@ jobs:
       - name: Only widely available web features
         run: deno task check-baseline
 
+      # A string that becomes DOM is an injection when a caller's data reaches it. CLAUDE.md,
+      # "No HTML strings".
+      - name: No HTML strings
+        run: deno task check-html-strings
+
       # A JSR version is immutable, so the time to find a packaging problem is now and not during
       # a publish.
       - name: Publish dry run

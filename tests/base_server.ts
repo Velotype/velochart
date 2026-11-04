@@ -16,6 +16,28 @@ export type ServerContextMetadata = {
     st?: number
 }
 
+/** Every gallery module the server serves */
+export const setOfModules: string[] = ['charts','features','large','more-charts']
+
+/**
+ * A gallery page. Every page runs under a strict Trusted Types policy, so any test that reaches
+ * code assigning an HTML string sees it throw. Violations are also collected for the sweep in the
+ * suite, which catches one that the code swallows.
+ */
+function galleryPage(script: string): Response {
+    const response = new Response(`<!DOCTYPE html><html><body>
+<div id="main-page"></div>
+<script>
+window.cspViolations = []
+document.addEventListener("securitypolicyviolation", (e) => window.cspViolations.push(e.sample))
+</script>
+<script src="/build/${script}.js" type="module" ></script>
+</body></html>`,{status:200})
+    response.headers.set("content-type", "text/html; charset=utf-8")
+    response.headers.set("content-security-policy", "require-trusted-types-for 'script'")
+    return response
+}
+
 export async function startAppServer(server_port: number): Promise<Server<ServerContextMetadata>> {
     const router: Router<ServerContextMetadata> = new Router<ServerContextMetadata>({
         context_metadata_constructor: () => ({}),
@@ -37,16 +59,8 @@ export async function startAppServer(server_port: number): Promise<Server<Server
             }
         }
     ))
-    const setOfModules = ['charts','features','large','more-charts']
     setOfModules.forEach((module) => {
-        router.get(`/${module}`, function() {
-            const response = new Response(`<!DOCTYPE html><html><body>
-<div id="main-page"></div>
-<script src="/build/${module}.js" type="module" ></script>
-</body></html>`,{status:200})
-            response.headers.set("content-type", "text/html; charset=utf-8")
-            return response
-        })
+        router.get(`/${module}`, () => galleryPage(module))
     })
     await router.mountFiles("/build/", `${Deno.cwd()}/tests/build/`)
     const app = new Server<ServerContextMetadata>(router)

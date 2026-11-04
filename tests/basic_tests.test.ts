@@ -7,7 +7,7 @@ import type {Server} from "@velotype/veloserver"
 
 import { launch } from "@astral/astral"
 import type { Browser, ElementHandle, Page } from "@astral/astral"
-import { closeAppServer, startAppServer } from "./base_server.ts"
+import { closeAppServer, setOfModules, startAppServer } from "./base_server.ts"
 import type { ServerContextMetadata } from "./base_server.ts"
 
 const server_port = 3000
@@ -73,6 +73,33 @@ describe('chart rendering', () => {
         }
         return new Set(raw.split(",").map(name => name.trim()).filter(name => name.length > 0))
     })()
+
+    it({name: "no gallery page turns a string into DOM, under a policy that would refuse it", fn: async () => {
+        // The control: a sweep that finds nothing means nothing unless the policy is really on
+        await page.goto(`${baseUrl}/${setOfModules[0]}`, {waitUntil: 'load'})
+        const refused = await page.evaluate(() => {
+            try {
+                document.createElement("div").innerHTML = "<b>x</b>"
+                return false
+            } catch {
+                return true
+            }
+        })
+        assertEquals(refused, true)
+
+        const found: Record<string, string[]> = {}
+        for (const module of setOfModules) {
+            if (selectedModules !== undefined && !selectedModules.has(module)) {
+                continue
+            }
+            await page.goto(`${baseUrl}/${module}`, {waitUntil: 'load'})
+            const violations = await page.evaluate(() => (globalThis as unknown as {cspViolations: string[]}).cspViolations)
+            if (violations.length > 0) {
+                found[module] = violations
+            }
+        }
+        assertEquals(found, {})
+    }})
 
     const itWrap = (name: string, module: string, selector: string, testFn: (selection: ElementHandle) => void | Promise<void>) => {
         it({name,
@@ -1100,7 +1127,10 @@ describe('chart rendering', () => {
     itWrap("toSvgString stands alone: titled, with a legend, resolved colors and no page classes", "features", "#export-chart", async (_selection: ElementHandle) => {
         const state = await page.evaluate(() => {
             const markup = (globalThis as unknown as {exporting: {toSvgString: () => string}}).exporting.toSvgString()
-            const parsed = new DOMParser().parseFromString(markup, "image/svg+xml")
+            // The page's Trusted Types policy refuses a bare string here, and this parse is the test's own
+            const {trustedTypes} = globalThis as unknown as {trustedTypes: {createPolicy: (name: string, rules: {createHTML: (s: string) => string}) => {createHTML: (s: string) => string}}}
+            const trusted = trustedTypes.createPolicy("test-parse", {createHTML: (s) => s}).createHTML(markup)
+            const parsed = new DOMParser().parseFromString(trusted, "image/svg+xml")
             return {
                 error: parsed.querySelector("parsererror") !== null,
                 hasVar: markup.includes("var(--"),
