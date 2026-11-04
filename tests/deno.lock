@@ -1,0 +1,42 @@
+{
+  "version": "5",
+  "specifiers": {
+    "jsr:@velotype/velodesign@0.2": "0.2.0",
+    "jsr:@velotype/velotype@*": "0.3.2",
+    "jsr:@velotype/velotype@~0.3.1": "0.3.2"
+  },
+  "jsr": {
+    "@velotype/velodesign@0.2.0": {
+      "integrity": "87194e39068745ad26ec6f4d0bb55068b1daf40ef3a15ae45b8bfa332ac817a4",
+      "dependencies": [
+        "jsr:@velotype/velotype@*",
+        "jsr:@velotype/velotype@~0.3.1"
+      ]
+    },
+    "@velotype/velotype@0.3.2": {
+      "integrity": "c181a7699e97747c9216e2a725fcc8d1e983376568cce106297aa7af9e013a08"
+    }
+  },
+  "workspace": {
+    "dependencies": [
+      "jsr:@astral/astral@~0.5.4",
+      "jsr:@std/assert@^1.0.16",
+      "jsr:@std/testing@^1.0.16",
+      "jsr:@velotype/velodesign@0.2",
+      "jsr:@velotype/veloserver@0.2",
+      "jsr:@velotype/velotype@*",
+      "jsr:@velotype/velotype@~0.3.1"
+    ],
+    "links": {
+      "jsr:@velotype/velochart@0.1.0": {
+        "dependencies": [
+          "jsr:@astral/astral@~0.5.4",
+          "jsr:@std/assert@^1.0.16",
+          "jsr:@std/testing@^1.0.16",
+          "jsr:@velotype/veloserver@0.2",
+          "jsr:@velotype/velotype@~0.3.1"
+        ]
+      }
+    }
+  }
+}

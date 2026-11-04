@@ -1,0 +1,82 @@
+name: CI
+
+# Every merge to main goes through a pull request, and these checks are what stands in for the
+# human reviewer this project does not have. They are required by the ruleset on main, so a PR
+# cannot auto-merge until all of them pass.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Typecheck, lint and publish dry run
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Typecheck the package
+        run: deno check src/index.ts
+
+      # The showcase's home page reads showcase/src/data/bundle-size.ts, which is measured rather
+      # than committed (any change to src/ would make a committed copy stale), so it is generated
+      # here first, exactly as the showcase's own bundle task does.
+      - name: Measure the bundle for the showcase
+        run: deno task size --write
+
+      - name: Typecheck the showcase
+        run: deno check src/main.tsx
+        working-directory: showcase
+
+      - name: Typecheck the tests
+        run: deno check tests/basic_tests.test.ts
+
+      # deno.json excludes jsx-key, which velotype's JSX can never satisfy; everything else must
+      # be clean for this to pass.
+      - name: Lint
+        run: deno lint
+
+      # A consumer compiles this package with the config's jsx mode but not its jsxFactory, so a
+      # .tsx file without its @jsx pragma calls React.createElement. 0.1.2 shipped that way. Nothing
+      # else here compiles the package as a dependency, so this does.
+      - name: Compiles as a dependency
+        run: deno task check-jsx
+
+      # Nothing rewrites this source for older browsers (deno bundle has no target), so a feature one
+      # engine lacks ships broken for its readers. A deny-list of features that aren't Baseline widely
+      # available yet - CLAUDE.md, "Browser support".
+      - name: Only widely available web features
+        run: deno task check-baseline
+
+      # A JSR version is immutable, so the time to find a packaging problem is now and not during
+      # a publish.
+      - name: Publish dry run
+        run: deno publish --dry-run
+
+  test:
+    name: Astral suite
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      # Astral drives a real headless Chrome. The runner ships one, and pointing Astral at it
+      # avoids a per-run download of its own copy.
+      - name: Record the browser Astral should drive
+        run: echo "CHROME_PATH=$(which google-chrome || which chromium-browser || which chromium)" >> "$GITHUB_ENV"
+
+      # Bundles every gallery module, then drives them. tests/build/ is gitignored, so this builds
+      # them from scratch on every run.
+      - name: Run the suite
+        run: deno task test

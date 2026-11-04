@@ -1,0 +1,72 @@
+name: Deploy showcase to Pages
+
+# Publishes the showcase - one bundle holding velotype, velodesign, velochart and the app, built the
+# way a consumer on JSR builds - to GitHub Pages. Runs after a push lands on main, same as everything else:
+# there is no second developer, so a merged pull request is the review, and this is the next step
+# after it rather than something a human triggers by hand. workflow_dispatch exists for a redeploy
+# that isn't tied to a new commit - a Pages outage, or picking up a settings change.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Only one deploy in flight, and a newer push wins over one still building - Pages serves whatever
+# finishes last regardless of queue order, so an in-progress older run is just wasted runner time.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - uses: actions/configure-pages@v5
+
+      # bundle:size runs first (cd .. && deno task size --write) and needs to write
+      # showcase/src/data/bundle-size.ts before bundle:app compiles main.tsx, which reads it for the
+      # home page's own figure.
+      - name: Bundle the showcase
+        run: deno task bundle
+        working-directory: showcase
+
+      # Assembles the tree Pages actually serves. gh-pages.html - checked in rather than generated,
+      # since it never changes - becomes both index.html and 404.html: the latter is what GitHub
+      # serves (without changing the browser's URL) when a direct hit on a client-side route like
+      # /velochart/components/bar-chart 404s at the real server, so the client router still sees
+      # the route it was actually asked for. .nojekyll turns off GitHub's Jekyll processing, which
+      # otherwise ignores the leading-underscore paths esbuild sometimes emits in sourcemaps.
+      - name: Assemble the Pages site
+        run: |
+          mkdir -p dist/build
+          cp gh-pages.html dist/index.html
+          cp gh-pages.html dist/404.html
+          cp -r build/. dist/build/
+          touch dist/.nojekyll
+        working-directory: showcase
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: showcase/dist
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

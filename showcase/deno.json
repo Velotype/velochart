@@ -1,0 +1,30 @@
+{
+    "minimumDependencyAge": {"age": "P1D", "exclude": ["jsr:@velotype/*"]},
+    "tasks": {
+        // One bundle holding velotype, velodesign, velochart and the app, which is how a consumer on
+        // JSR builds: both packages resolve to one copy of velotype only when they are bundled
+        // together. See the note in server.ts.
+        "bundle": "deno task bundle:size && deno task bundle:app",
+        "bundle:size": "cd .. && deno task size --write",
+        "bundle:app": "deno bundle ./src/main.tsx --output ./build/main.js --minify --platform browser --sourcemap=linked",
+        "dev": "deno task bundle && deno run --allow-read --allow-net --allow-sys --allow-env ./server.ts",
+        "serve": "deno run --allow-read --allow-net --allow-sys --allow-env ./server.ts"
+    },
+    "compilerOptions": {
+        "jsx": "react-jsx",
+        "jsxImportSource": "@velotype/velotype",
+        "lib": ["dom", "deno.ns", "esnext"]
+    },
+    "imports": {
+        "@velotype/veloserver": "jsr:@velotype/veloserver@^0.2.0",
+        "@velotype/velochart": "../src/index.ts",
+        "@velotype/velodesign": "jsr:@velotype/velodesign@^0.2.0",
+        "@velotype/velotype/jsx-runtime": "jsr:@velotype/velotype@^0.3.1",
+        "@velotype/velotype": "jsr:@velotype/velotype@^0.3.1"
+    },
+    "lint": {
+        "rules": {
+            "exclude": ["jsx-key"]
+        }
+    }
+}

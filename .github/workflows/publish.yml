@@ -1,0 +1,23 @@
+name: Publish
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publish:
+    # Pinned rather than ubuntu-latest: that label migrates to Ubuntu 26 in October 2026, and a
+    # publish job is the last place to find out the runner moved under you.
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write # The OIDC ID token is used for authentication with JSR.
+    steps:
+      - uses: actions/checkout@v5
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      # Fail here rather than halfway through a publish that cannot be undone - a JSR version is
+      # immutable, so a bad one is permanent.
+      - name: Verify the package builds and publishes cleanly
+        run: deno publish --dry-run
+      - run: npx jsr publish

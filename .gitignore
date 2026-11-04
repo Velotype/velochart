@@ -1,0 +1,7 @@
+.DS_Store
+dist/
+tests/build/
+showcase/build/
+showcase/dist/
+# Measured by deno task size --write when the showcase is built or checked, never committed
+showcase/src/data/bundle-size.ts

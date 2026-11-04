@@ -1,0 +1,111 @@
+name: Bundle size
+
+# Reports what this pull request does to the size of the whole library, as a consumer would
+# download it. The figure comes from the same script the showcase's home page is built from, so
+# the number in the comment and the number on the site are measured the same way.
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: bundle-size-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    name: Measure
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Both sides of the comparison are needed, so fetch enough history to check the base out.
+          fetch-depth: 0
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Measure this branch
+        id: head
+        run: echo "sizes=$(deno task size --json | tail -1)" >> "$GITHUB_OUTPUT"
+
+      # The base is measured with the base's own script, not this branch's - otherwise a PR that
+      # changes how measuring works would report a difference that is not a size change at all.
+      - name: Measure the base branch
+        id: base
+        run: |
+          git checkout --detach "origin/${{ github.base_ref }}"
+          if [ -f scripts/bundle-size.ts ]; then
+            echo "sizes=$(deno task size --json | tail -1)" >> "$GITHUB_OUTPUT"
+          else
+            echo "sizes=" >> "$GITHUB_OUTPUT"
+          fi
+          git checkout --force -
+
+      - name: Comment on the pull request
+        uses: actions/github-script@v7
+        env:
+          HEAD_SIZES: ${{ steps.head.outputs.sizes }}
+          BASE_SIZES: ${{ steps.base.outputs.sizes }}
+        with:
+          script: |
+            const head = JSON.parse(process.env.HEAD_SIZES)
+            const base = process.env.BASE_SIZES ? JSON.parse(process.env.BASE_SIZES) : null
+            const kb = (n) => `${(n / 1024).toFixed(1)} KB`
+
+            // A signed, always-explicit delta: "no change" has to be as legible as a regression,
+            // or a reader has to compare two numbers by eye to find out nothing happened.
+            const delta = (now, before) => {
+              if (before === null) { return "n/a" }
+              const diff = now - before
+              if (diff === 0) { return "no change" }
+              const pct = ((diff / before) * 100).toFixed(2)
+              return `${diff > 0 ? "+" : ""}${kb(diff)} (${diff > 0 ? "+" : ""}${pct}%)`
+            }
+
+            const body = [
+              "<!-- velochart-bundle-size -->",
+              "### Bundle size",
+              "",
+              "The whole package bundled from `src/index.ts`, minified, nothing tree-shaken away.",
+              "",
+              "**velochart alone** - velotype held out, the way a browser loads it in production:",
+              "",
+              "| | base | this PR | change |",
+              "|---|---:|---:|---:|",
+              `| gzip | ${base && base.ownGzip ? kb(base.ownGzip) : "n/a"} | ${kb(head.ownGzip)} | ${delta(head.ownGzip, base && base.ownGzip ? base.ownGzip : null)} |`,
+              `| raw | ${base && base.ownRaw ? kb(base.ownRaw) : "n/a"} | ${kb(head.ownRaw)} | ${delta(head.ownRaw, base && base.ownRaw ? base.ownRaw : null)} |`,
+              "",
+              "With velotype inlined, which is what `deno bundle` emits and is **not** what a consumer pays velochart:",
+              "",
+              "| | base | this PR | change |",
+              "|---|---:|---:|---:|",
+              `| gzip | ${base ? kb(base.gzip) : "n/a"} | ${kb(head.gzip)} | ${delta(head.gzip, base ? base.gzip : null)} |`,
+              `| raw | ${base ? kb(base.raw) : "n/a"} | ${kb(head.raw)} | ${delta(head.raw, base ? base.raw : null)} |`,
+              "",
+              "gzip is what a browser actually pulls down, and the velochart-alone figure is what the showcase home page shows.",
+              "A base measured before this split reports n/a for the first table - the older script emitted no such figure.",
+            ].join("\n")
+
+            // One comment per pull request, rewritten in place - a new comment per push buries the
+            // conversation under a wall of near-identical tables.
+            const {data: comments} = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            })
+            const existing = comments.find((c) => c.body.includes("<!-- velochart-bundle-size -->"))
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body,
+              })
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body,
+              })
+            }
+
+            core.summary.addRaw(body.replace("<!-- velochart-bundle-size -->", "")).write()

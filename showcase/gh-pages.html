@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>velochart</title>
+<link rel="icon" href="data:,"/>
+</head>
+<body>
+<div id="main-page"></div>
+<!--
+  The GitHub Pages counterpart to server.ts's `pageShell` - see the comment there for why this is one
+  module. The one thing that differs is the base path: a GitHub Pages *project* site (as opposed to an
+  org/user site) is served under its own repo name rather than the domain root, so every absolute path
+  below is prefixed with "/velochart" rather than "/". This file is deployed verbatim as both
+  index.html and 404.html (the standard GitHub Pages SPA trick - a direct hit on a client-side route
+  404s at the real server, and GitHub serves this file's content for it without changing the browser's
+  URL, so the client router below still sees the route it was actually asked for).
+
+  "/velochart" has to be kept in sync by hand in exactly two places if this repository is ever renamed
+  or forked under another name: this prefix, and the inline script's own copy of it below (main.tsx
+  reads the latter to configure History's client-side routing to match).
+-->
+<!-- A classic (non-module) script, so it runs synchronously during parsing - before the deferred
+     module script below, which is what main.tsx needs to find this already set. -->
+<script>window.__VELOCHART_BASE_PATH__ = "/velochart"</script>
+<script src="/velochart/build/main.js" type="module"></script>
+</body>
+</html>
