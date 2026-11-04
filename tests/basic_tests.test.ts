@@ -819,4 +819,163 @@ describe('chart rendering', () => {
         assertEquals(view, {xMin: 1, xMax: 4})
     })
 
+
+    itWrap("a histogram counts values into its bins, with bars that touch", "more-charts", "#histogram-chart", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const root = document.getElementById("histogram-chart") as HTMLElement
+            const bars = Array.from(root.querySelectorAll("rect.vtc-chart-bar")) as SVGRectElement[]
+            const edges = bars.map(b => ({left: Number(b.getAttribute("x")), right: Number(b.getAttribute("x")) + Number(b.getAttribute("width"))}))
+            return {
+                counts: Array.from(root.querySelectorAll(".vtc-chart-sr tbody td")).map(c => c.textContent),
+                first: root.querySelector(".vtc-chart-sr tbody th")!.textContent,
+                gap: edges[1].left - edges[0].right,
+                slot: edges[1].left - edges[0].left,
+            }
+        })
+        // A value on an edge goes to the bin it starts, and the last bin takes its top edge too
+        assertEquals(state.counts, ["2", "5", "2", "3", "2"])
+        assertEquals(state.first, "0 - 2")
+        if (state.gap > state.slot * 0.1) {fail(`ERROR: histogram bars should nearly touch, gap ${state.gap} of ${state.slot}`)}
+    })
+
+    itWrap("a waterfall hangs each step from the last and draws totals from zero", "more-charts", "#waterfall-chart", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const root = document.getElementById("waterfall-chart") as HTMLElement
+            return (Array.from(root.querySelectorAll("rect.vtc-chart-bar")) as SVGRectElement[]).map(b => ({
+                top: Number(b.getAttribute("y")), bottom: Number(b.getAttribute("y")) + Number(b.getAttribute("height")),
+            }))
+        })
+        assertEquals(state.length, 4)
+        // Sales starts where Start ended
+        assertEquals(Math.round(state[1].bottom), Math.round(state[0].top))
+        // Costs falls from where Sales ended
+        assertEquals(Math.round(state[2].top), Math.round(state[1].top))
+        // End reaches back to the baseline and up to where Costs finished
+        assertEquals(Math.round(state[3].bottom), Math.round(state[0].bottom))
+        assertEquals(Math.round(state[3].top), Math.round(state[2].bottom))
+    })
+
+    itWrap("a box plot summarizes raw values and draws an outlier by itself", "more-charts", "#boxplot-chart", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const root = document.getElementById("boxplot-chart") as HTMLElement
+            return {
+                boxes: root.querySelectorAll("rect.vtc-chart-bar").length,
+                outliers: root.querySelectorAll("circle.vtc-chart-outlier").length,
+                row: Array.from(root.querySelectorAll(".vtc-chart-sr tbody tr:first-child td")).map(c => c.textContent),
+                ticks: Array.from(root.querySelectorAll("text.vtc-chart-tick-y")).map(t => Number(t.textContent)),
+            }
+        })
+        assertEquals(state.boxes, 2)
+        assertEquals(state.outliers, 1)
+        assertEquals(state.row, ["1", "3.25", "5.5", "7.75", "9"])
+        if (Math.max(...state.ticks) < 100) {fail(`ERROR: the axis has to reach the outlier, got ${state.ticks}`)}
+    })
+
+    itWrap("a candlestick colors by direction, and reads all four numbers on hover", "more-charts", "#candles-chart", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const root = document.getElementById("candles-chart") as HTMLElement
+            const hit = root.querySelector("rect.vtc-chart-hit") as SVGRectElement
+            const box = hit.getBoundingClientRect()
+            hit.dispatchEvent(new PointerEvent("pointermove", {bubbles: true, clientX: box.left + 40, clientY: box.top + 5}))
+            const rows = Array.from(root.querySelectorAll(".vtc-chart-tooltip-row")).filter(r => !(r as HTMLElement).hidden).map(r => (r as HTMLElement).innerText.replace(/\s+/g, " ").trim())
+            return {
+                bodies: root.querySelectorAll("rect.vtc-chart-candle").length,
+                fills: Array.from(root.querySelectorAll("rect.vtc-chart-candle")).map(c => c.getAttribute("fill")),
+                ohlc: document.getElementById("ohlc-chart")!.querySelectorAll("path.vtc-chart-candle").length,
+                rows,
+            }
+        })
+        assertEquals(state.bodies, 5)
+        assertEquals(state.ohlc, 5)
+        assertEquals(state.fills[0], "var(--secondary)")
+        assertEquals(state.fills[1], "var(--accent)")
+        assertEquals(state.rows.length, 4)
+        assertEquals(state.rows[0].slice(0, 1), "O")
+    })
+
+    itWrap("a heatmap shades by value, leaves a missing cell empty and has a scale", "more-charts", "#heatmap-chart", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const root = document.getElementById("heatmap-chart") as HTMLElement
+            const cells = Array.from(root.querySelectorAll("rect.vtc-chart-cell")) as SVGRectElement[]
+            const diverging = Array.from(document.getElementById("diverging-chart")!.querySelectorAll("rect.vtc-chart-cell")).map(c => c.getAttribute("fill") ?? "")
+            return {
+                cells: cells.length,
+                empty: root.querySelectorAll("rect.vtc-chart-cell-empty").length,
+                labels: Array.from(root.querySelectorAll("text.vtc-chart-cell-label")).map(t => t.textContent),
+                scale: root.querySelectorAll("rect.vtc-chart-scale-step").length,
+                fills: [cells[0].getAttribute("fill") ?? "", cells[5].getAttribute("fill") ?? ""],
+                diverging,
+            }
+        })
+        assertEquals(state.cells, 6)
+        assertEquals(state.empty, 1)
+        assertEquals(state.labels, ["1", "2", "3", "4", "6"])
+        assertEquals(state.scale, 12)
+        if (!state.fills[0].includes(" 8%") || !state.fills[1].includes(" 100%")) {fail(`ERROR: fills should follow the value: ${state.fills}`)}
+        if (!state.diverging[0].includes("--accent") || !state.diverging[1].includes("--primary")) {fail(`ERROR: expected two hues around zero: ${state.diverging}`)}
+    })
+
+    itWrap("a calendar heatmap lays days out by weekday and week", "more-charts", "#calendar-chart", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const root = document.getElementById("calendar-chart") as HTMLElement
+            const cells = Array.from(root.querySelectorAll("rect.vtc-chart-cell")) as SVGRectElement[]
+            const months = root.querySelectorAll("text.vtc-chart-month-label").length
+            const first = {x: Number(cells[0].getAttribute("x")), y: Number(cells[0].getAttribute("y"))}
+            const next = {x: Number(cells[1].getAttribute("x")), y: Number(cells[1].getAttribute("y"))}
+            return {count: cells.length, months, first, next, height: Number(cells[0].getAttribute("height"))}
+        })
+        assertEquals(state.count, 120)
+        if (state.months < 3) {fail(`ERROR: expected month names, got ${state.months}`)}
+        // 1 Jan 2026 is a Thursday, the fourth row of a week starting on Monday
+        assertEquals(Math.round(state.first.y - state.height * 3), 20)
+        assertEquals(state.next.x, state.first.x)
+        assertEquals(Math.round(state.next.y - state.first.y), Math.round(state.height))
+    })
+
+    itWrap("a treemap tiles leaves by area without gaps or overlap", "more-charts", "#treemap-chart", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const root = document.getElementById("treemap-chart") as HTMLElement
+            const rects = (Array.from(root.querySelectorAll("rect.vtc-chart-cell")) as SVGRectElement[]).map(r => ({
+                area: Number(r.getAttribute("width")) * Number(r.getAttribute("height")),
+                ratio: Math.max(Number(r.getAttribute("width")) / Number(r.getAttribute("height")), Number(r.getAttribute("height")) / Number(r.getAttribute("width"))),
+            }))
+            return {rects, legend: root.querySelectorAll(".vtc-chart-legend-item").length, rows: root.querySelectorAll(".vtc-chart-sr tbody tr").length, first: root.querySelector(".vtc-chart-sr tbody th")!.textContent}
+        })
+        assertEquals(state.rects.length, 5)
+        assertEquals(state.legend, 3)
+        assertEquals(state.rows, 5)
+        assertEquals(state.first, "Engineering / Platform")
+        const worst = Math.max(...state.rects.map(r => r.ratio))
+        if (worst > 8) {fail(`ERROR: squarifying should avoid long slivers, worst ratio ${worst}`)}
+    })
+
+    itWrap("a sunburst draws a ring per level", "more-charts", "#sunburst-chart", async (_selection: ElementHandle) => {
+        const arcs = await page.evaluate(() => document.getElementById("sunburst-chart")!.querySelectorAll("path.vtc-chart-arc").length)
+        // Three top-level nodes and four children
+        assertEquals(arcs, 7)
+    })
+
+    itWrap("a funnel keeps its order and shows each stage's share of the first", "more-charts", "#funnel-chart", async (_selection: ElementHandle) => {
+        const labels = await page.evaluate(() => Array.from(document.getElementById("funnel-chart")!.querySelectorAll("text.vtc-chart-funnel-value")).map(t => t.textContent))
+        assertEquals(labels, ["1000 · 100.0%", "400 · 40.0%", "100 · 10.0%"])
+    })
+
+    itWrap("a sankey sizes bands by value, in columns, and leaves out a link closing a loop", "more-charts", "#sankey-chart", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const root = document.getElementById("sankey-chart") as HTMLElement
+            const nodes = Array.from(root.querySelectorAll("rect.vtc-chart-node")).map(r => ({x: Number(r.getAttribute("x")), y: Number(r.getAttribute("y")), h: Number(r.getAttribute("height"))}))
+            return {nodes, bands: root.querySelectorAll("path.vtc-chart-link").length, rows: root.querySelectorAll(".vtc-chart-sr tbody tr").length, svgHeight: Number(root.querySelector("svg")!.getAttribute("height"))}
+        })
+        assertEquals(state.bands, 3)
+        assertEquals(state.rows, 3)
+        // Web and Mail in the first column, Trial in the second, Paid in the third
+        assertEquals(state.nodes[0].x, state.nodes[1].x)
+        if (!(state.nodes[2].x > state.nodes[0].x && state.nodes[3].x > state.nodes[2].x)) {fail(`ERROR: columns out of order: ${JSON.stringify(state.nodes)}`)}
+        // Trial takes all of Web's 60 and Mail's 40, so it is as tall as both
+        if (Math.abs(state.nodes[2].h - state.nodes[0].h - state.nodes[1].h) > 1) {fail(`ERROR: node height should follow flow: ${JSON.stringify(state.nodes)}`)}
+        for (const node of state.nodes) {
+            if (node.y < -0.5 || node.y + node.h > state.svgHeight + 0.5) {fail(`ERROR: a node left the drawing: ${JSON.stringify(node)}`)}
+        }
+    })
+
 })

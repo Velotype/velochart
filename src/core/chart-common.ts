@@ -66,8 +66,8 @@ export function seriesColor(index: number, explicit?: string): string {
     return palette[index % palette.length]
 }
 
-/** How one series is drawn on a cartesian chart */
-export type ChartSeriesKind = "line" | "area" | "bar" | "scatter"
+/** How one series is drawn on a cartesian chart. `"none"` isn't drawn, and still reads in the tooltip and the hidden table */
+export type ChartSeriesKind = "line" | "area" | "bar" | "scatter" | "none"
 
 /** How a line gets from one point to the next */
 export type ChartCurve = "linear" | "smooth" | "step" | "step-before" | "step-after"
@@ -292,6 +292,16 @@ export function mountChartStyles(): void {
 .vtc-chart-hover .vtc-chart-mark-active{opacity:1;}
 .vtc-chart-clickable .vtc-chart-mark,.vtc-chart-clickable .vtc-chart-hit{cursor:pointer;}
 .vtc-chart-point{stroke:var(--background);stroke-width:1;}
+.vtc-chart-whisker{stroke-width:1.5;fill:none;}
+.vtc-chart-cell{stroke:var(--background);stroke-width:1;}
+.vtc-chart-cell-empty{fill:var(--background-2);}
+.vtc-chart-cell-label{font-size:0.8em;font-family:inherit;text-anchor:middle;dominant-baseline:middle;pointer-events:none;fill:var(--text);}
+.vtc-chart-node-label{fill:var(--text);font-size:0.85em;font-family:inherit;dominant-baseline:middle;pointer-events:none;}
+.vtc-chart-link{opacity:0.35;}
+.vtc-chart-hover .vtc-chart-link.vtc-chart-mark{opacity:0.15;}
+.vtc-chart-hover .vtc-chart-link.vtc-chart-mark-active{opacity:0.6;}
+.vtc-chart-scale{display:flex;align-items:center;justify-content:center;gap:0.5em;font-size:0.85em;color:var(--text);}
+.vtc-chart-scale-bar{width:8em;height:0.6em;border-radius:0.15em;}
 .vtc-chart-underlay{position:absolute;inset:0;pointer-events:none;overflow:hidden;}
 .vtc-chart-underlay + .vtc-chart-svg{position:relative;}
 .vtc-chart-canvas{display:block;}

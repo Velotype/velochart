@@ -136,8 +136,17 @@ let nextClipId = 0
 const SLIDER_HEIGHT = 28
 const SLIDER_GAP = 34
 
-/** Share of a category's slot left empty, so neighbouring groups read as separate */
-const CATEGORY_PADDING = 0.25
+/** What a chart drawing its own marks on the engine's axes gets to work with */
+export type CartesianPlot = {
+    box: PlotBox
+    /** The rows in view */
+    rows: {x: number, point: ChartPointType, index: number}[]
+    /** How wide one row's slot is, in pixels */
+    slot: number
+    mapX: (x: number) => number
+    mapY: (value: number) => number
+}
+
 const MARGIN = {left: 56, right: 12, top: 12, bottom: 32}
 /** Space a title takes beside an axis */
 const AXIS_TITLE = 18
@@ -241,7 +250,7 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         }
         this.#rows = undefined
         const rows = this.#ensureRows()
-        this.#fullX = this.#xDomain(rows, this.#hasKind("bar"))
+        this.#fullX = this.#xDomain(rows, this.padsX())
         if (atEdge && this.#view) {
             this.#view = {...this.#view, xMin: this.#fullX[1] - span, xMax: this.#fullX[1]}
         }
@@ -285,6 +294,26 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
 
     protected defaultHover(): "index" | "mark" | "nearest" {
         return "index"
+    }
+
+    /** For a chart that draws its own marks, as a waterfall does. Called between the bars and the lines */
+    protected drawCustom(_parent: SVGElement, _plot: CartesianPlot): void {
+        // Most charts draw series and nothing else
+    }
+
+    /** Values the axis must reach besides the series', for a chart drawing its own marks */
+    protected extraValues(_start: number, _end: number): number[] {
+        return []
+    }
+
+    /** Share of a slot left empty between bars, so neighbouring groups read as separate */
+    protected barPadding(): number {
+        return 0.25
+    }
+
+    /** Whether the first and last rows need room around them, as anything with width does */
+    protected padsX(): boolean {
+        return this.#hasKind("bar") || this.#hasKind("scatter")
     }
 
     protected seriesKind(series: ChartSeriesType): ChartSeriesKind {
@@ -472,7 +501,7 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         this.#markInteractive(svg)
     }
 
-    #xDomain(rows: Row[], hasBars: boolean): [number, number] {
+    #xDomain(rows: Row[], padded: boolean): [number, number] {
         if (this.#xKind === "category") {
             return [-0.5, rows.length - 0.5]
         }
@@ -482,7 +511,7 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         if (min === max) {
             min = this.#xKind === "log" ? min / 2 : min - 1
             max = this.#xKind === "log" ? max * 2 : max + 1
-        } else if (hasBars || this.#hasKind("scatter")) {
+        } else if (padded) {
             // Half a slot each side, so the first and last bar or point are not cut by the plot's edge
             const pad = this.#xKind === "log" ? 0 : Math.max(this.#smallestGap(rows) / 2, (max - min) * 0.02)
             min -= pad
@@ -540,6 +569,11 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
                 }
             }
         }
+        if (side === "left") {
+            for (const value of this.extraValues(start, end)) {
+                see(value)
+            }
+        }
         // An annotation has to be in view to mean anything, and a threshold is often above the data
         for (const annotation of this.chartAttrs.annotations ?? []) {
             if (annotation.type === "point" && side === "left") {
@@ -584,7 +618,6 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         const attrs = this.chartAttrs
         const rows = this.#ensureRows()
         const horizontal = attrs.horizontal ?? false
-        const hasBars = this.#hasKind("bar")
         const view = this.#view
         // One row past each end of the view, so a line runs off the edge of the plot rather than stopping short
         const start = view ? Math.max(0, this.#lowerBound(rows, view.xMin) - 1) : 0
@@ -629,7 +662,7 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
             height: Math.max(1, height - MARGIN.top - MARGIN.bottom - (xTitle ? AXIS_TITLE : 0) - (attrs.rangeSlider ? SLIDER_GAP + SLIDER_HEIGHT - 10 : 0)),
         }
 
-        this.#fullX = this.#xDomain(rows, hasBars)
+        this.#fullX = this.#xDomain(rows, this.padsX())
         const [xMin, xMax] = view ? [view.xMin, view.xMax] : this.#fullX
         const xLength = horizontal ? box.height : box.width
         const xFrom = horizontal ? box.top : box.left
@@ -820,6 +853,12 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         if (bars.length > 0) {
             this.#drawBars(marks, layout, bars, canvas)
         }
+        this.drawCustom(marks, {
+            box: layout.box, slot: layout.slot,
+            rows: (this.#rows as Row[]).slice(layout.start, layout.end),
+            mapX: layout.x.scale.map,
+            mapY: layout.yLeft.scale.map,
+        })
         series.forEach((s, i) => {
             const kind = this.seriesKind(s)
             if (kind === "line" || kind === "area") {
@@ -1067,7 +1106,7 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         const rows = this.#rows as Row[]
         const horizontal = attrs.horizontal ?? false
         const bars = attrs.series.filter((s, i) => this.seriesKind(s) === "bar" && !this.isEntryHidden(i))
-        const group = Math.max(1, layout.slot * (1 - CATEGORY_PADDING))
+        const group = Math.max(1, layout.slot * (1 - this.barPadding()))
         const thickness = attrs.stacked ? group : group / Math.max(1, bars.length)
         // One label every n rows, when a label wider than its slot would run into the next
         const inView = Math.max(1, layout.end - layout.start)
@@ -1199,7 +1238,7 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         const rows = this.#rows as Row[]
         const {stacked, horizontal} = this.chartAttrs
         const hoverMarks = this.#hoverMode() === "mark"
-        const group = Math.max(1, layout.slot * (1 - CATEGORY_PADDING))
+        const group = Math.max(1, layout.slot * (1 - this.barPadding()))
         const thickness = stacked ? group : group / bars.length
         for (let rowIndex = layout.start; rowIndex < layout.end; rowIndex++) {
             const centre = layout.x.scale.map(rows[rowIndex].x)
