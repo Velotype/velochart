@@ -45,7 +45,8 @@ const brushed = expose("brushed", getComponent<LineChart>(<LineChart data={ten} 
     (globalThis as unknown as {lastBrush: unknown}).lastBrush = selection
 }}/>))
 const slid = expose("slid", getComponent<LineChart>(<LineChart data={ten} series={[{key: "v"}]} rangeSlider height={200}/>))
-const streaming = expose("streaming", getComponent<LineChart>(<LineChart data={[{x: 0, values: {v: 1}}]} series={[{key: "v"}]} height={120}/>))
+const streamingData = expose("streamingData", [{x: 0, values: {v: 1}}])
+const streaming = expose("streaming", getComponent<LineChart>(<LineChart data={streamingData} series={[{key: "v"}]} height={120}/>))
 const syncedA = expose("syncedA", getComponent<LineChart>(<LineChart data={ten} series={[{key: "v"}]} zoom="x" syncGroup="zooming" height={100}/>))
 const syncedB = expose("syncedB", getComponent<LineChart>(<LineChart data={ten} series={[{key: "v"}]} zoom="x" syncGroup="zooming" height={100}/>))
 

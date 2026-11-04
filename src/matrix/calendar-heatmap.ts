@@ -74,9 +74,10 @@ export class CalendarHeatmap extends ChartFrame<CalendarHeatmapAttrsType> {
         const weekday = (number: number) => (((number + 4 - start) % 7) + 7) % 7
         const firstColumnDay = from - weekday(from)
         const weeks = Math.floor((to - firstColumnDay) / 7) + 1
-        const left = 30
         const top = 20
-        const cell = Math.max(2, Math.min((width - left - 2) / weeks, (height - top - 2) / 7))
+        const cell = Math.max(2, Math.min((width - 30 - 2) / weeks, (height - top - 2) / 7))
+        // A grid held short by its height sits in the middle of the width it doesn't fill
+        const left = Math.max(30, (width - weeks * cell + 30) / 2)
         const dateFormat = new Intl.DateTimeFormat(undefined, {dateStyle: "medium", timeZone: "UTC"})
         const monthFormat = new Intl.DateTimeFormat(undefined, {month: "short", timeZone: "UTC"})
         const dayFormat = new Intl.DateTimeFormat(undefined, {weekday: "short", timeZone: "UTC"})

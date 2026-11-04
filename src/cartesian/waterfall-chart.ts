@@ -60,6 +60,10 @@ export class WaterfallChart extends CartesianFrame<CartesianAttrsType & Waterfal
         return true
     }
 
+    protected override seriesSetAxis(): boolean {
+        return false
+    }
+
     protected override legendEntries(): {label: string, color: string}[] {
         return []
     }

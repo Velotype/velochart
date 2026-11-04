@@ -303,7 +303,7 @@ export function mountChartStyles(): void {
 .vtc-chart-whisker{stroke-width:1.5;fill:none;}
 .vtc-chart-cell{stroke:var(--background);stroke-width:1;}
 .vtc-chart-cell-empty{fill:var(--background-2);}
-.vtc-chart-cell-label{font-size:0.8em;font-family:inherit;text-anchor:middle;dominant-baseline:middle;pointer-events:none;fill:var(--text);}
+.vtc-chart-cell-label{font-size:0.8em;font-family:inherit;text-anchor:middle;dominant-baseline:middle;pointer-events:none;fill:var(--text);stroke:var(--background);stroke-width:3px;paint-order:stroke;}
 .vtc-chart-node-label{fill:var(--text);font-size:0.85em;font-family:inherit;dominant-baseline:middle;pointer-events:none;}
 .vtc-chart-link{opacity:0.35;}
 .vtc-chart-hover .vtc-chart-link.vtc-chart-mark{opacity:0.15;}
@@ -325,7 +325,7 @@ export function mountChartStyles(): void {
 .vtc-chart-annotation-band{fill:var(--background-7);opacity:0.12;pointer-events:none;}
 .vtc-chart-annotation-point{fill:var(--background-7);stroke:var(--background);stroke-width:2;pointer-events:none;}
 .vtc-chart-annotation-label{fill:var(--text);font-size:0.8em;font-family:inherit;pointer-events:none;}
-.vtc-chart-value-label{fill:var(--text);font-size:0.8em;font-family:inherit;text-anchor:middle;pointer-events:none;}
+.vtc-chart-value-label{fill:var(--text);font-size:0.8em;font-family:inherit;text-anchor:middle;pointer-events:none;stroke:var(--background);stroke-width:3px;paint-order:stroke;}
 .vtc-chart-error{stroke-width:1.5;fill:none;pointer-events:none;}
 .vtc-chart-trend{fill:none;stroke-width:1.5;stroke-dasharray:6 4;opacity:0.8;pointer-events:none;}
 .vtc-chart-crosshair{stroke:var(--background-6);stroke-width:1;stroke-dasharray:3 3;pointer-events:none;shape-rendering:crispedges;}

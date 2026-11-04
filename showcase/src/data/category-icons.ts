@@ -9,6 +9,12 @@ const categoryIcons: Record<string, string> = {
     "Cartesian": "M3 13h4.5v8H3zM9.75 7.5h4.5V21h-4.5zM16.5 3h4.5v18h-4.5z",
     // A pie with one slice pulled out to the upper right
     "Radial": "M11 3a9.5 9.5 0 109.5 10H11zM13.5 2.5V11h8.5a8.6 8.6 0 00-8.5-8.5z",
+    // A grid of cells
+    "Matrix": "M3 3h5.3v5.3H3zM9.35 3h5.3v5.3h-5.3zM15.7 3H21v5.3h-5.3zM3 9.35h5.3v5.3H3zM9.35 9.35h5.3v5.3h-5.3zM15.7 9.35H21v5.3h-5.3zM3 15.7h5.3V21H3zM9.35 15.7h5.3V21h-5.3zM15.7 15.7H21V21h-5.3z",
+    // A large block beside two smaller ones, nested as a treemap is
+    "Hierarchy": "M3 3h10v18H3zM15 3h6v9h-6zM15 14h6v7h-6z",
+    // A band narrowing from left to right
+    "Flow": "M3 4h4c6 0 8 6 14 6v4c-6 0-8 6-14 6H3z",
     // A jagged trend line, drawn as a solid band
     "Inline": "M2 16.5l6-6 4 4 8.5-8.5 1.5 1.5-10 10-4-4-4.5 4.5z",
     // Not a category: the magnifier that stands in for the search box on the collapsed rail

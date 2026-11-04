@@ -193,6 +193,10 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
     #canvas: CanvasMarks | undefined
     #clipId = `vtc-chart-clip-${nextClipId++}`
     #fullX: [number, number] = [0, 1]
+    /** The chart's `data` is its own copy, so that `appendData` can change it */
+    #ownsData = false
+    /** The width of a view to keep at the live edge on the next drawing, after `appendData` */
+    #followSpan: number | undefined
 
     override mount() {
         super.mount()
@@ -240,20 +244,24 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
      * moves along with it, so a reader looking at the latest stays on the latest.
      */
     appendData(points: ChartPointType[], options?: {maxPoints?: number}): void {
+        // Copied the first time, because the array is the caller's and dropping old points would change it
+        if (!this.#ownsData) {
+            this.#ownsData = true
+            this.chartAttrs = {...this.chartAttrs, data: [...this.chartAttrs.data]}
+        }
         const data = this.chartAttrs.data
-        const atEdge = this.#view !== undefined && this.#view.xMax >= this.#fullX[1]
-        const span = this.#view ? this.#view.xMax - this.#view.xMin : 0
-        data.push(...points)
+        for (const point of points) {
+            data.push(point)
+        }
         const max = options?.maxPoints
         if (max !== undefined && data.length > max) {
             data.splice(0, data.length - max)
         }
-        this.#rows = undefined
-        const rows = this.#ensureRows()
-        this.#fullX = this.#xDomain(rows, this.padsX())
-        if (atEdge && this.#view) {
-            this.#view = {...this.#view, xMin: this.#fullX[1] - span, xMax: this.#fullX[1]}
+        // Worked out against the edge as last drawn, however many calls arrive before the next frame
+        if (this.#view && this.#view.xMax >= this.#fullX[1]) {
+            this.#followSpan = this.#view.xMax - this.#view.xMin
         }
+        this.#rows = undefined
         this.refreshTableSoon()
         this.redrawPlot()
     }
@@ -282,10 +290,16 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
     }
 
     #markInteractive(svg: SVGElement): void {
+        const zoom = this.#canZoom() ? this.chartAttrs.zoom : undefined
         if (this.#canBrush()) {
             svg.classList.add("vtc-chart-brushable")
-        } else if (this.#canZoom()) {
+        } else if (zoom) {
             svg.classList.add("vtc-chart-zoomable")
+        }
+        // A touch drag that the browser takes for a scroll is cancelled before it gets here. Sideways
+        // stays ours and up and down stays the page's, unless the chart moves up and down itself.
+        if (zoom || this.#canBrush() || this.chartAttrs.rangeSlider) {
+            (svg as unknown as HTMLElement).style.touchAction = zoom === "y" || zoom === "xy" || this.chartAttrs.brush === "xy" ? "none" : "pan-y"
         }
     }
 
@@ -304,6 +318,11 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
     /** Values the axis must reach besides the series', for a chart drawing its own marks */
     protected extraValues(_start: number, _end: number): number[] {
         return []
+    }
+
+    /** Whether the series' own values set the axis. A waterfall's are steps, so only its running total does */
+    protected seriesSetAxis(): boolean {
+        return true
     }
 
     /** Share of a slot left empty between bars, so neighbouring groups read as separate */
@@ -328,7 +347,17 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
         if (!changed.data && !changed.series) {
             return
         }
+        if (changed.data) {
+            this.#ownsData = false
+        }
         const rows = this.#ensureRows()
+        // A view showing nothing of the new data would look like a chart with no data
+        if (this.#view) {
+            const [min, max] = this.#xDomain(rows, this.padsX())
+            if (this.#view.xMin >= max || this.#view.xMax <= min) {
+                this.#view = undefined
+            }
+        }
         // A change of shape has no in-between to show, so only values moving get a transition
         if (rows.length !== rowCount || fromHighs.length !== this.#highs.length || rows.length > 2000) {
             return
@@ -483,7 +512,12 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
     }
 
     protected override draw(svg: SVGElement, width: number, height: number): void {
-        this.#ensureRows()
+        const rows = this.#ensureRows()
+        if (this.#followSpan !== undefined && this.#view) {
+            const edge = this.#xDomain(rows, this.padsX())[1]
+            this.#view = {...this.#view, xMin: edge - this.#followSpan, xMax: edge}
+        }
+        this.#followSpan = undefined
         const layout = this.#computeLayout(width, height)
         this.#layout = layout
         this.#cursorRow = -1
@@ -555,7 +589,7 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
                 if (value > max) {max = value}
             }
         }
-        for (let s = 0; s < series.length; s++) {
+        for (let s = 0; s < series.length && this.seriesSetAxis(); s++) {
             if ((series[s].yAxis === "right" ? "right" : "left") !== side) {
                 continue
             }
@@ -1167,10 +1201,13 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
                     const a = along(i)
                     // A stacked segment's value sits in its middle, since the end of it is the next segment
                     const middle = attrs.stacked ? axis.scale.map((high + this.#shownLows[seriesIndex][i]) / 2) : position
-                    const offset = attrs.stacked ? 0 : (value >= 0 ? -6 : 6)
+                    // Past the plot's far end a label would run into the axis labels, so it goes inside the bar
+                    const room = horizontal ? true : value >= 0 ? position - 18 >= 0 : position + 18 <= layout.box.top + layout.box.height
+                    const outward = room === (value >= 0)
+                    const offset = attrs.stacked ? 0 : (outward ? -6 : 6)
                     const label = svgEl("text", horizontal
                         ? {class: "vtc-chart-value-label", x: middle - offset * 2, y: a, "dominant-baseline": "middle", "text-anchor": attrs.stacked ? "middle" : value >= 0 ? "start" : "end"}
-                        : {class: "vtc-chart-value-label", x: a, y: middle + offset, "dominant-baseline": attrs.stacked ? "middle" : value >= 0 ? "auto" : "hanging"})
+                        : {class: "vtc-chart-value-label", x: a, y: middle + offset, "dominant-baseline": attrs.stacked ? "middle" : outward ? "auto" : "hanging"})
                     label.textContent = format(value)
                     svg.appendChild(label)
                 }
@@ -1385,7 +1422,7 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
     /** Another chart in the group moved its cursor: show the same x here, or clear when it left */
     #showSyncedCursor(x: number | undefined): void {
         const layout = this.#layout
-        if (!layout) {
+        if (!layout || !this.#rows) {
             return
         }
         if (x === undefined) {
@@ -1702,7 +1739,9 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
     #onPointerMove = (event: PointerEvent) => {
         const layout = this.#layout
         const svg = this.currentSvg
-        if (!layout || !svg) {
+        // No rows means data has arrived since the last drawing, so the layout no longer describes them
+        // and the next frame is about to replace it
+        if (!layout || !svg || !this.#rows) {
             return
         }
         if (event.pointerType === "touch" && this.#continuePinch(layout, event)) {
@@ -1770,7 +1809,7 @@ export abstract class CartesianFrame<AttrsType extends CartesianAttrsType> exten
 
     protected override keyboardCount(): number {
         const layout = this.#layout
-        if (!layout) {
+        if (!layout || !this.#rows) {
             return 0
         }
         const mode = this.#hoverMode()

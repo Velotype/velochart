@@ -771,15 +771,25 @@ describe('chart rendering', () => {
 
     itWrap("appendData coalesces a burst into one drawing and drops old points", "features", "#stream-chart", async (_selection: ElementHandle) => {
         const state = await page.evaluate(() => {
-            const chart = (globalThis as unknown as {streaming: {appendData: (points: unknown[], options: unknown) => void}}).streaming
+            const global = globalThis as unknown as {
+                streaming: {appendData: (points: unknown[], options: unknown) => void}
+                streamingData: unknown[]
+            }
+            const chart = global.streaming
             const root = document.getElementById("stream-chart") as HTMLElement
             const before = root.querySelector("svg")
+            const hit = root.querySelector("rect.vtc-chart-hit") as SVGRectElement
+            const box = hit.getBoundingClientRect()
             for (let i = 1; i <= 50; i++) {
                 chart.appendData([{x: i, values: {v: i}}], {maxPoints: 20})
+                // A pointer between two frames finds the data changed and the layout not yet redrawn
+                hit.dispatchEvent(new PointerEvent("pointermove", {bubbles: true, clientX: box.left + 5, clientY: box.top + 5}))
             }
-            return {sameSvgUntilNextFrame: root.querySelector("svg") === before}
+            return {sameSvgUntilNextFrame: root.querySelector("svg") === before, callersArray: global.streamingData.length}
         })
         assertEquals(state.sameSvgUntilNextFrame, true)
+        // Dropping old points must not reach into the array the caller passed in
+        assertEquals(state.callersArray, 1)
         await settle()
         const dots = await page.evaluate(() => document.querySelectorAll("#stream-chart circle.vtc-chart-dot").length)
         assertEquals(dots, 20)
@@ -1136,6 +1146,32 @@ describe('chart rendering', () => {
         assertEquals(result.canvas.head, [80, 78, 71])
         assertEquals(result.image, true)
         if (result.plain.size < 500) {fail(`ERROR: a blank image is suspiciously small: ${result.plain.size}`)}
+    })
+
+
+    itWrap("a zoomed view with nothing in it goes away when the data changes under it", "features", "#zoom-chart", async (_selection: ElementHandle) => {
+        const view = await page.evaluate(() => {
+            const chart = (globalThis as unknown as {zoomable: {zoomTo: (v: unknown) => void, update: (a: unknown) => void, getView: () => unknown}}).zoomable
+            chart.zoomTo({xMin: 7, xMax: 9})
+            chart.update({data: [{label: "a", values: {v: 1}}, {label: "b", values: {v: 2}}]})
+            return chart.getView() ?? null
+        })
+        assertEquals(view, null)
+    })
+
+    itWrap("a drag on a touch screen stays the chart's, and scrolling up and down stays the page's", "features", "#zoom-chart", async (_selection: ElementHandle) => {
+        const action = await page.evaluate(() => (document.querySelector("#zoom-chart svg") as unknown as HTMLElement).style.touchAction)
+        assertEquals(action, "pan-y")
+    })
+
+    itWrap("a value label at the plot's far end stays clear of the axis labels", "features", "#values-chart", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const root = document.getElementById("values-chart") as HTMLElement
+            const label = Array.from(root.querySelectorAll("text.vtc-chart-value-label")).find(t => t.textContent === "-5u") as SVGTextElement
+            const down = Array.from(root.querySelectorAll("text.vtc-chart-tick-x")).find(t => t.textContent === "down") as SVGTextElement
+            return {labelBottom: label.getBoundingClientRect().bottom, tickTop: down.getBoundingClientRect().top}
+        })
+        if (state.labelBottom > state.tickTop) {fail(`ERROR: the value label runs into the axis label: ${JSON.stringify(state)}`)}
     })
 
 })
