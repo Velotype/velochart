@@ -217,7 +217,7 @@ Astral suite is served under `require-trusted-types-for 'script'`, so a test tha
 | `ci.yml` - *Astral suite* | PR + push to main | `deno task test`, which bundles the gallery and drives it |
 | `bundle-size.yml` | PR | Comments the size against the base branch. Advisory |
 | `pages.yml` | Push to main | Deploys the showcase |
-| `publish.yml` | Manual | `deno publish --dry-run`, then `npx jsr publish` |
+| `publish.yml` | Manual | `deno publish --dry-run`, then `deno publish` with the same deno |
 
 **A pull request waits for a person to merge it**, once the required checks pass; nothing merges on its own.
 
