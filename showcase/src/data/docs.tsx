@@ -303,7 +303,7 @@ const attrTables: Record<string, AttrDoc[]> = {
     ],
     BoxPlotChart: [
         {name: "data", type: "BoxPlotEntryType[]", required: true, description: "One box each: {label, color?, values} to summarize, or {label, color?, summary} worked out already."},
-        {name: "labels", type: "BoxPlotLabelsType", defaultValue: "symbols", description: "Names for the five numbers in the tooltip and the hidden table. The defaults are symbols, because the package assumes no language."},
+        {name: "labels", type: "BoxPlotLabelsType", defaultValue: "min, Q1, x̃, Q3, max", description: "Names for the five numbers in the tooltip, the hidden table and an export. The defaults are notation rather than words, because the package assumes no language, and with them the tooltip draws min and max as whisker ends."},
         ...axesAttrs.filter(attr => attr.name !== "xAxis"), ...frameAttrs,
     ],
     CandlestickChart: [

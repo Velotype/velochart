@@ -3,6 +3,7 @@ import type { CartesianAttrsType, CartesianPlot } from "./cartesian-frame.ts"
 import { seriesColor, svgEl } from "../core/chart-common.ts"
 import type { ChartPointType, ChartSeriesKind } from "../core/chart-common.ts"
 import type { RenderableElements } from "../core/velotype.ts"
+import { Icon } from "../core/velodesign.ts"
 
 /** The five numbers a box is drawn from, and anything past its whiskers */
 export type BoxSummaryType = {
@@ -17,7 +18,7 @@ export type BoxSummaryType = {
 /** One box: its raw values to summarize, or a summary worked out already */
 export type BoxPlotEntryType = {label: string, color?: string} & ({values: number[]} | {summary: BoxSummaryType})
 
-/** What the five numbers are called in the tooltip and the hidden table */
+/** What the five numbers are called in the tooltip, the hidden table and an export */
 export type BoxPlotLabelsType = {min: string, q1: string, median: string, q3: string, max: string}
 
 /**
@@ -25,7 +26,10 @@ export type BoxPlotLabelsType = {min: string, q1: string, median: string, q3: st
  */
 export type BoxPlotChartAttrsType = Omit<CartesianAttrsType, "data" | "series" | "stacked" | "horizontal" | "showDots" | "spanGaps" | "xAxis"> & {
     data: BoxPlotEntryType[]
-    /** Names for the five numbers. The defaults are symbols, because the package assumes no language */
+    /**
+     * Names for the five numbers. The defaults are notation rather than words, because the package
+     * assumes no language: min, Q1, x̃, Q3 and max, with min and max drawn as whisker ends in the tooltip
+     */
     labels?: BoxPlotLabelsType
 }
 
@@ -52,7 +56,13 @@ export function summarize(values: number[]): BoxSummaryType | undefined {
     }
 }
 
-const SYMBOLS: BoxPlotLabelsType = {min: "↓", q1: "Q1", median: "x̃", q3: "Q3", max: "↑"}
+const SYMBOLS: BoxPlotLabelsType = {min: "min", q1: "Q1", median: "x̃", q3: "Q3", max: "max"}
+
+/** The whisker ends, drawn in the tooltip for min and max when the default labels are in use */
+const MARKS: Partial<Record<keyof BoxPlotLabelsType, Icon>> = {
+    max: new Icon(24, 24, "M7 5.5h10M12 5.5v13", 2),
+    min: new Icon(24, 24, "M7 18.5h10M12 18.5v-13", 2),
+}
 
 function toEngineAttrs(attrs: BoxPlotChartAttrsType): CartesianAttrsType {
     const labels = attrs.labels ?? SYMBOLS
@@ -74,15 +84,19 @@ function toEngineAttrs(attrs: BoxPlotChartAttrsType): CartesianAttrsType {
  */
 export class BoxPlotChart extends CartesianFrame<CartesianAttrsType> {
     #entries: BoxPlotEntryType[]
+    /** Whether the tooltip draws min and max as whisker ends: only with the default labels */
+    #marks: boolean
 
     constructor(attrs: BoxPlotChartAttrsType, children: RenderableElements[]) {
         super(toEngineAttrs(attrs), children)
         this.#entries = attrs.data
+        this.#marks = attrs.labels === undefined
     }
 
     /** Replaces the groups */
     setEntries(data: BoxPlotEntryType[], labels?: BoxPlotLabelsType): void {
         this.#entries = data
+        this.#marks = labels === undefined
         this.update(toEngineAttrs({...this.chartAttrs, data, labels} as BoxPlotChartAttrsType))
     }
 
@@ -137,7 +151,7 @@ export class BoxPlotChart extends CartesianFrame<CartesianAttrsType> {
             })
             this.addMark(box, {
                 title: entry.label,
-                rows: series.map(s => ({label: s.label ?? s.key, value: this.format(row.point.values[s.key] ?? 0)})),
+                rows: series.map(s => ({label: s.label ?? s.key, value: this.format(row.point.values[s.key] ?? 0), mark: this.#marks ? MARKS[s.key as keyof BoxPlotLabelsType] : undefined})),
                 anchor: {left: x - width / 2, right: x + width / 2, y: Math.min(q1, q3)},
                 detail: {label: entry.label, index: row.index, value: summary.median},
             })

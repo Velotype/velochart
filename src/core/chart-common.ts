@@ -1,5 +1,5 @@
 import { h } from "./jsx.ts"
-import { Button, Stack, Text } from "./velodesign.ts"
+import { Button, I, type Icon, Stack, Text } from "./velodesign.ts"
 import { mountStyles } from "./styles.ts"
 
 /**
@@ -401,6 +401,8 @@ transition:opacity 0.1s ease-out;
 .vtc-chart-tooltip-title{font-weight:bold;margin-block-end:0.2em;}
 .vtc-chart-tooltip-row{display:flex;align-items:center;gap:0.4em;justify-content:space-between;}
 .vtc-chart-tooltip-name{display:inline-flex;align-items:center;gap:0.4em;}
+.vtc-chart-tooltip-mark{display:inline-flex;}
+.vtc-chart-tooltip-mark svg{height:1.15em;}
 .vtc-chart-tooltip-value{font-variant-numeric:tabular-nums;}
 @media (prefers-reduced-motion: reduce){
 .vtc-chart-bar,.vtc-chart-arc,.vtc-chart-mark,.vtc-chart-tooltip{transition:none;}
@@ -460,6 +462,8 @@ export type TooltipRow = {
     label: string
     value: string
     color?: string
+    /** Drawn in place of the label's text. The label still names the row everywhere text is needed */
+    mark?: Icon
 }
 
 /**
@@ -474,7 +478,7 @@ export class ChartTooltip {
     #titleEl: HTMLDivElement
     #titleText: Text
     /** Row elements are reused across hovers rather than rebuilt - see `show` */
-    #rows: {root: HTMLDivElement, swatch: HTMLSpanElement, label: Text, value: Text}[] = []
+    #rows: {root: HTMLDivElement, swatch: HTMLSpanElement, markEl: HTMLSpanElement, mark: Icon | undefined, labelEl: HTMLSpanElement, label: Text, value: Text}[] = []
     /** Signature of the content currently rendered, so an unchanged hover touches no nodes */
     #contentKey = ""
     #visible = false
@@ -509,6 +513,9 @@ export class ChartTooltip {
             name.className = "vtc-chart-tooltip-name"
             const swatch = document.createElement("span")
             swatch.className = "vtc-chart-legend-swatch"
+            const markEl = document.createElement("span")
+            markEl.className = "vtc-chart-tooltip-mark"
+            markEl.hidden = true
             const labelEl = document.createElement("span")
             const label = document.createTextNode("")
             labelEl.appendChild(label)
@@ -517,11 +524,12 @@ export class ChartTooltip {
             const value = document.createTextNode("")
             valueEl.appendChild(value)
             name.appendChild(swatch)
+            name.appendChild(markEl)
             name.appendChild(labelEl)
             root.appendChild(name)
             root.appendChild(valueEl)
             this.element.appendChild(root)
-            this.#rows.push({root, swatch, label, value})
+            this.#rows.push({root, swatch, markEl, mark: undefined, labelEl, label, value})
         }
         return this.#rows[index]
     }
@@ -536,7 +544,7 @@ export class ChartTooltip {
      * Now a same-content move writes two style properties and nothing else.
      */
     show(title: string, rows: TooltipRow[], anchor: TooltipAnchor, bounds: TooltipBounds): void {
-        const key = `${title}\u0001${rows.map(r => `${r.label}\u0000${r.value}\u0000${r.color ?? ""}`).join("\u0002")}`
+        const key = `${title}\u0001${rows.map(r => `${r.label}\u0000${r.value}\u0000${r.color ?? ""}\u0000${r.mark?.d ?? ""}`).join("\u0002")}`
         const contentChanged = key !== this.#contentKey
         if (contentChanged) {
             this.#contentKey = key
@@ -600,6 +608,17 @@ export class ChartTooltip {
             const cells = this.#row(index)
             if (cells.root.hidden) {
                 cells.root.hidden = false
+            }
+            // A mark replaces the label's text only on screen; the drawing is replaced only when it changes
+            if (cells.mark !== row.mark) {
+                cells.mark = row.mark
+                if (row.mark) {
+                    cells.markEl.replaceChildren(h(I, {icon: row.mark}) as unknown as Node)
+                } else {
+                    cells.markEl.replaceChildren()
+                }
+                cells.markEl.hidden = !row.mark
+                cells.labelEl.hidden = !!row.mark
             }
             if (cells.label.nodeValue !== row.label) {
                 cells.label.nodeValue = row.label

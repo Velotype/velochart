@@ -3,7 +3,7 @@
 import { h } from "../core/jsx.ts"
 import { Component, getComponent, passthroughAttrsToElement } from "../core/velotype.ts"
 import type { RenderableElements, StylePassthroughAttrs } from "../core/velotype.ts"
-import { Button, ButtonGroup, DateTimePicker, FormField, Grid, I, Icon, Popover, registerIcon, Stack, Text, TextBox } from "../core/velodesign.ts"
+import { Button, ButtonGroup, DateTimePicker, FormField, Glyphs, Grid, I, Icon, Popover, Stack, Text, TextBox } from "../core/velodesign.ts"
 import { mountStyles } from "../core/styles.ts"
 import { svgEl } from "../core/chart-common.ts"
 import { fullTimeFormat } from "../core/scale.ts"
@@ -91,23 +91,25 @@ function pad(value: number, length: number = 2): string {
     return String(value).padStart(length, "0")
 }
 
-/** The control's icons, in velodesign's registry: each one solid path in a 24px box */
-const iconPaths: Record<string, string> = {
-    "vtc-time-earlier": "M15.4 4.6 17 6.2 11.2 12l5.8 5.8-1.6 1.6L8 12z",
-    "vtc-time-later": "M8.6 4.6 7 6.2 12.8 12 7 17.8l1.6 1.6L16 12z",
-    "vtc-time-open": "M4.6 8.6 6.2 7 12 12.8 17.8 7l1.6 1.6L12 16z",
-    "vtc-time-clock": "M2 12a10 10 0 1 0 20 0a10 10 0 1 0-20 0zM4 12a8 8 0 1 1 16 0a8 8 0 1 1-16 0zM11 6h2v5.6l3.6 2.1-1 1.7L11 12.7z",
-    "vtc-time-zoom-out": "M3 10.5a7.5 7.5 0 1 0 15 0a7.5 7.5 0 1 0-15 0zM5 10.5a5.5 5.5 0 1 1 11 0a5.5 5.5 0 1 1-11 0zM15.6 17l1.4-1.4 5 5-1.4 1.4zM7.5 9.5h6v2h-6z",
-    "vtc-time-copy": "M8 2h12a2 2 0 0 1 2 2v12h-2V4H8zM4 6h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2zM4 8v12h12V8z",
-    "vtc-time-paste": "M9 2h6v2h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h3zM9 6H6v14h12V6h-3v2H9z",
-    "vtc-time-copied": "M9.5 17.6 3.9 12l1.5-1.5 4.1 4.1 9.1-9.1L20 7z",
+/**
+ * The control's icons: velodesign's reviewed glyphs where one fits, and line drawings in the same style
+ * (a 24-unit box, round ends, a 2-unit line) for the three it has none for
+ */
+const ICONS = {
+    clock: new Icon(24, 24, "M20.5 12a8.5 8.5 0 1 1-17 0 8.5 8.5 0 1 1 17 0zM12 7.5V12l3 2", 2),
+    // The back sheet is only its top-right corner, the part the front sheet leaves showing
+    copy: new Icon(24, 24, "M5 7h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2zM7.5 3H19a2 2 0 0 1 2 2v11.5", 2),
+    paste: new Icon(24, 24, "M8.5 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-1.5M9.5 3h5a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM9 12h6M9 16h4", 2),
+    copied: Glyphs.tick,
+    open: Glyphs.chevronDown,
+    earlier: Glyphs.chevronLeft,
+    later: Glyphs.chevronRight,
+    zoomOut: Glyphs.zoomOut,
 }
 
-/** An icon that decorates what names it, so assistive technology is told nothing of its own */
-function icon(key: string): HTMLElement {
-    const element = <I i={key}/> as unknown as HTMLElement
-    element.setAttribute("aria-hidden", "true")
-    return element
+/** An icon that decorates what names it: with no label, velodesign hides it from assistive technology */
+function icon(key: keyof typeof ICONS): HTMLElement {
+    return <I icon={ICONS[key]}/> as unknown as HTMLElement
 }
 
 let areStylesMounted = false
@@ -117,9 +119,6 @@ function mountControlStyles(): void {
         return
     }
     areStylesMounted = true
-    for (const key of Object.keys(iconPaths)) {
-        registerIcon(key, new Icon(24, 24, iconPaths[key]))
-    }
     mountStyles(
 /* velodesign's parts, at the size a toolbar wants them. Its layer always loses to this one */
 `
@@ -235,10 +234,10 @@ export class TimeWindowControl extends Component<TimeWindowControlAttrsType> {
 
         this.#rangeText = <Text class="vtc-time-window-range-text" numeric/> as HTMLSpanElement
         this.#range = <Button type="text" class="vtc-time-window-range">
-            {icon("vtc-time-clock")}
+            {icon("clock")}
             {this.#rangeText}
             {attrs.utc ? <Text type="muted" class="vtc-time-window-zone">UTC</Text> : null}
-            {icon("vtc-time-open")}
+            {icon("open")}
         </Button> as HTMLButtonElement
         this.#range.setAttribute("aria-haspopup", "dialog")
         this.#range.setAttribute("aria-expanded", "false")
@@ -254,7 +253,7 @@ export class TimeWindowControl extends Component<TimeWindowControlAttrsType> {
                 this.#closeToRange()
             }
         })
-        this.#copyIcon = <span>{icon("vtc-time-copy")}</span> as HTMLSpanElement
+        this.#copyIcon = <span>{icon("copy")}</span> as HTMLSpanElement
 
         this.#typedButton = <Button type="text" onClick={() => this.#applyFilter()}/> as HTMLButtonElement
         this.#typedButton.hidden = true
@@ -274,7 +273,7 @@ export class TimeWindowControl extends Component<TimeWindowControlAttrsType> {
             <Stack gap="0.25rem" wrap={false} class="vtc-time-window-entry">
                 {this.#filter}
                 {this.#square(<Button type="text" ariaLabel={labels.copy} onClick={() => this.#copyRange()}>{this.#copyIcon}</Button>, labels.copy)}
-                {this.#square(<Button type="text" ariaLabel={labels.paste} onClick={() => this.#pasteRange()}>{icon("vtc-time-paste")}</Button>, labels.paste)}
+                {this.#square(<Button type="text" ariaLabel={labels.paste} onClick={() => this.#pasteRange()}>{icon("paste")}</Button>, labels.paste)}
             </Stack>
             {this.#list}
             <Stack direction="column" gap="0.5rem" class="vtc-time-window-ends">
@@ -298,11 +297,11 @@ export class TimeWindowControl extends Component<TimeWindowControlAttrsType> {
 
         this.#root = <Stack align="center" gap="0.375rem" class="vtc-time-window">
             <ButtonGroup>
-                {this.#square(<Button type="text" ariaLabel={labels.previous} onClick={() => timeWindow.shift(-1)}>{icon("vtc-time-earlier")}</Button>, labels.previous)}
+                {this.#square(<Button type="text" ariaLabel={labels.previous} onClick={() => timeWindow.shift(-1)}>{icon("earlier")}</Button>, labels.previous)}
                 {this.#popover}
-                {this.#square(<Button type="text" ariaLabel={labels.next} onClick={() => timeWindow.shift(1)}>{icon("vtc-time-later")}</Button>, labels.next)}
+                {this.#square(<Button type="text" ariaLabel={labels.next} onClick={() => timeWindow.shift(1)}>{icon("later")}</Button>, labels.next)}
             </ButtonGroup>
-            {this.#square(<Button type="text" ariaLabel={labels.zoomOut} onClick={() => timeWindow.zoomOut()}>{icon("vtc-time-zoom-out")}</Button>, labels.zoomOut)}
+            {this.#square(<Button type="text" ariaLabel={labels.zoomOut} onClick={() => timeWindow.zoomOut()}>{icon("zoomOut")}</Button>, labels.zoomOut)}
             {attrs.hideLive ? null : this.#liveButton(labels.live)}
         </Stack> as HTMLDivElement
         this.#root.setAttribute("role", "group")
@@ -448,9 +447,9 @@ export class TimeWindowControl extends Component<TimeWindowControlAttrsType> {
             this.#filter.select()
             return
         }
-        this.#copyIcon.replaceChildren(icon("vtc-time-copied"))
+        this.#copyIcon.replaceChildren(icon("copied"))
         clearTimeout(this.#copiedTimer)
-        this.#copiedTimer = setTimeout(() => this.#copyIcon.replaceChildren(icon("vtc-time-copy")), COPIED_MS)
+        this.#copiedTimer = setTimeout(() => this.#copyIcon.replaceChildren(icon("copy")), COPIED_MS)
     }
 
     /** Takes the range from the clipboard, or where the browser won't, puts the reader in the box to paste it */

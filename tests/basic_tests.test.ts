@@ -1758,6 +1758,34 @@ describe('chart rendering', () => {
         if (Math.max(...state.ticks) < 100) {fail(`ERROR: the axis has to reach the outlier, got ${state.ticks}`)}
     })
 
+    itWrap("a box plot draws min and max as whisker ends in its tooltip, and names them in its table", "more-charts", "#boxplot-chart", async (_selection: ElementHandle) => {
+        const read = (id: string) => page.evaluate((id: string) => {
+            const root = document.getElementById(id) as HTMLElement
+            // A box is a mark of its own, which shows its tooltip when the pointer comes over it
+            root.querySelector("rect.vtc-chart-bar")!.dispatchEvent(new PointerEvent("pointerover", {bubbles: true}))
+            const rows = Array.from(root.querySelectorAll(".vtc-chart-tooltip-row")).filter(row => !(row as HTMLElement).hidden)
+            return {
+                rows: rows.map(row => {
+                    const mark = row.querySelector(".vtc-chart-tooltip-mark") as HTMLElement
+                    return {
+                        mark: mark.hidden ? null : mark.querySelector("path")?.getAttribute("d") ?? "",
+                        text: (row.querySelector(".vtc-chart-tooltip-name") as HTMLElement).innerText.trim(),
+                    }
+                }),
+                headers: Array.from(root.querySelectorAll(".vtc-chart-sr thead th")).map(th => th.textContent),
+            }
+        }, {args: [id]})
+        const plain = await read("boxplot-chart")
+        assertEquals(plain.rows.map(row => row.mark), ["M7 18.5h10M12 18.5v-13", null, null, null, "M7 5.5h10M12 5.5v13"])
+        // A mark takes the label's place on screen, so the row shows no text of its own
+        assertEquals(plain.rows.map(row => row.text), ["", "Q1", "x̃", "Q3", ""])
+        assertEquals(plain.headers.slice(1), ["min", "Q1", "x̃", "Q3", "max"])
+        // Labels the app passes are shown as written, with no marks over them
+        const labelled = await read("boxplot-labelled")
+        assertEquals(labelled.rows.map(row => row.mark), [null, null, null, null, null])
+        assertEquals(labelled.rows.map(row => row.text), ["Low", "Q1", "Mid", "Q3", "High"])
+    })
+
     itWrap("a candlestick colors by direction, and reads all four numbers on hover", "more-charts", "#candles-chart", async (_selection: ElementHandle) => {
         const state = await page.evaluate(() => {
             const root = document.getElementById("candles-chart") as HTMLElement
