@@ -1,8 +1,7 @@
 name: CI
 
-# Every merge to main goes through a pull request, and these checks are what stands in for the
-# human reviewer this project does not have. They are required by the ruleset on main, so a PR
-# cannot auto-merge until all of them pass.
+# Every merge to main goes through a pull request, and these checks are required by the ruleset on
+# main, so a PR cannot be merged until all of them pass. A person merges it.
 on:
   pull_request:
     branches: [main]
