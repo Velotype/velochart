@@ -322,20 +322,22 @@ describe('chart rendering', () => {
         assertEquals(state.zoomed.to - state.zoomed.from, 7_200_000)
     })
 
-    itWrap("the control's list, buttons and fields drive the window, and it follows the window back", "time-window", "#tw-control select", async (_selection: ElementHandle) => {
+    itWrap("the control's list, buttons and fields drive the window, and it follows the window back", "time-window", "#tw-control button", async (_selection: ElementHandle) => {
         const state = await page.evaluate(async () => {
             const g = globalThis as unknown as WindowGlobals
             const root = document.getElementById("tw-control") as HTMLElement
-            const select = root.querySelector("select") as HTMLSelectElement
-            select.value = "900000"
-            select.dispatchEvent(new Event("change"))
+            const range = root.querySelector(".vtc-time-window-range") as HTMLButtonElement
+            const text = () => root.querySelector(".vtc-time-window-range-text")!.textContent
+            range.click()
+            ;(root.querySelector('[data-span="900000"]') as HTMLButtonElement).click()
             const picked = g.shared.getRange()
-            const buttons = root.querySelectorAll("button")
+            const shownPicked = text()
+            const buttons = root.querySelectorAll(".vtd-button-group > .vtd-button")
             ;(buttons[0] as HTMLButtonElement).click()
             const backed = g.shared.getRange()
-            const shownAfterBack = select.selectedOptions[0].textContent
+            const shownBacked = text()
             g.shared.setRange(Date.UTC(2026, 0, 1, 1, 0), Date.UTC(2026, 0, 1, 3, 0))
-            const inputs = root.querySelectorAll("input")
+            const inputs = root.querySelectorAll('input[type="datetime-local"]') as NodeListOf<HTMLInputElement>
             const shown = [inputs[0].value, inputs[1].value]
             inputs[0].value = "2026-01-01T02:00"
             inputs[0].dispatchEvent(new Event("input"))
@@ -348,11 +350,14 @@ describe('chart rendering', () => {
             const backwards = g.shared.getRange().from
             const live = root.querySelector(".vtc-time-window-live") as HTMLButtonElement
             live.click()
-            return {pickedSpan: picked.to - picked.from, backedSpan: backed.to - picked.to, shownAfterBack, shown, beforePause, typed, backwards, pressed: live.getAttribute("aria-pressed"), isLive: g.shared.isLive()}
+            return {pickedSpan: picked.to - picked.from, backedBy: backed.to - picked.to, shownPicked, shownBacked, title: range.title, shown, beforePause, typed, backwards, pressed: live.getAttribute("aria-pressed"), isLive: g.shared.isLive()}
         })
         assertEquals(state.pickedSpan, 900_000)
-        assertEquals(state.backedSpan, -900_000)
-        assertEquals(state.shownAfterBack !== "", true)
+        assertEquals(state.backedBy, -900_000)
+        assertEquals(state.shownPicked, new Intl.NumberFormat(undefined, {style: "unit", unit: "minute", unitDisplay: "short"}).format(15))
+        // Moved off now, it says which fifteen minutes rather than only how long
+        assertEquals(state.shownBacked !== state.shownPicked, true)
+        assertEquals(state.title.includes("–"), true)
         assertEquals(state.shown, ["2026-01-01T01:00", "2026-01-01T03:00"])
         assertEquals(state.beforePause, Date.UTC(2026, 0, 1, 1, 0))
         assertEquals(state.typed, Date.UTC(2026, 0, 1, 2, 0))
@@ -360,6 +365,123 @@ describe('chart rendering', () => {
         assertEquals(state.backwards, state.typed)
         assertEquals(state.pressed, "true")
         assertEquals(state.isLive, true)
+    })
+
+    itWrap("the range opens on click and closes on Escape, an outside press, a pick or moving on", "time-window", "#tw-control button", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const root = document.getElementById("tw-control") as HTMLElement
+            const range = root.querySelector(".vtc-time-window-range") as HTMLButtonElement
+            const popover = root.querySelector(".vtd-popover-content") as HTMLElement
+            const filter = root.querySelector(".vtc-time-window-filter") as HTMLInputElement
+            const shut = () => !popover.classList.contains("vtd-popover-open")
+            const result: Record<string, unknown> = {startsShut: shut(), hiddenTakesNoRoom: popover.getBoundingClientRect().height}
+            range.click()
+            result.opened = !shut()
+            result.expanded = range.getAttribute("aria-expanded")
+            result.focusInFilter = document.activeElement === filter
+            range.focus()
+            range.click()
+            range.click()
+            filter.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape", bubbles: true}))
+            result.escape = shut()
+            result.focusBack = document.activeElement === range
+            range.click()
+            document.body.click()
+            result.outside = shut()
+            range.click()
+            ;(root.querySelector('[data-span="3600000"]') as HTMLButtonElement).click()
+            result.pick = shut()
+            result.focusAfterPick = document.activeElement === range
+            range.click()
+            const after = document.createElement("button")
+            document.body.appendChild(after)
+            after.focus()
+            result.movedOn = shut()
+            after.remove()
+            range.click()
+            range.click()
+            result.toggled = shut()
+            return result
+        })
+        assertEquals(state, {startsShut: true, hiddenTakesNoRoom: 0, opened: true, expanded: "true", focusInFilter: true, escape: true, focusBack: true, outside: true, pick: true, focusAfterPick: true, movedOn: true, toggled: true})
+    })
+
+    itWrap("a range can be typed as a number and a unit, and the list narrows to what is typed", "time-window", "#tw-control button", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const g = globalThis as unknown as WindowGlobals
+            const root = document.getElementById("tw-control") as HTMLElement
+            const range = root.querySelector(".vtc-time-window-range") as HTMLButtonElement
+            const filter = root.querySelector(".vtc-time-window-filter") as HTMLInputElement
+            const type = (text: string) => {
+                filter.value = text
+                filter.dispatchEvent(new Event("input"))
+            }
+            const enter = () => filter.dispatchEvent(new KeyboardEvent("keydown", {key: "Enter", bubbles: true}))
+            const span = () => g.shared.getRange().to - g.shared.getRange().from
+            const shown = () => Array.from(root.querySelectorAll(".vtc-time-window-list .vtd-button")).filter(b => !(b as HTMLElement).hidden).map(b => b.textContent)
+            const spans: Record<string, number> = {}
+            for (const text of ["13h", "now-30m", "500ms", "2 d", "1w", "1M", "1m"]) {
+                range.click()
+                type(text)
+                enter()
+                spans[text] = span()
+            }
+            range.click()
+            type("13h")
+            const offered = shown()
+            enter()
+            const label = root.querySelector(".vtc-time-window-range-text")!.textContent
+            range.click()
+            type("13h")
+            type("hr")
+            const narrowed = shown()
+            const before = span()
+            type("nonsense")
+            enter()
+            return {spans, offered, label, narrowed, invalid: filter.getAttribute("aria-invalid"), stillOpen: root.querySelector(".vtd-popover-content")!.classList.contains("vtd-popover-open"), unchanged: span() === before}
+        })
+        assertEquals(state.spans, {"13h": 46_800_000, "now-30m": 1_800_000, "500ms": 500, "2 d": 172_800_000, "1w": 604_800_000, "1M": 2_592_000_000, "1m": 60_000})
+        assertEquals(state.offered, [new Intl.NumberFormat(undefined, {style: "unit", unit: "hour", unitDisplay: "short"}).format(13)])
+        // A typed length reads as that length, not as the two times it happens to fall between
+        assertEquals(state.label, state.offered[0])
+        assertEquals(state.narrowed, ["1 hr", "6 hr", "12 hr"])
+        assertEquals(state.invalid, "true")
+        assertEquals(state.stillOpen, true)
+        assertEquals(state.unchanged, true)
+    })
+
+    itWrap("the arrow keys walk from the box down the list and back", "time-window", "#tw-control button", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const root = document.getElementById("tw-control") as HTMLElement
+            const filter = root.querySelector(".vtc-time-window-filter") as HTMLInputElement
+            const press = (key: string) => document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", {key, bubbles: true}))
+            ;(root.querySelector(".vtc-time-window-range") as HTMLButtonElement).click()
+            press("ArrowDown")
+            const first = (document.activeElement as HTMLElement).dataset.span
+            press("ArrowDown")
+            const second = (document.activeElement as HTMLElement).dataset.span
+            press("ArrowUp")
+            press("ArrowUp")
+            return {first, second, back: document.activeElement === filter}
+        })
+        assertEquals(state, {first: "300000", second: "900000", back: true})
+    })
+
+    itWrap("the control is compact, and what opens from it stays on the page", "time-window", "#tw-control button", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const root = document.getElementById("tw-control") as HTMLElement
+            const range = root.querySelector(".vtc-time-window-range") as HTMLButtonElement
+            const popover = root.querySelector(".vtd-popover-content") as HTMLElement
+            const height = root.getBoundingClientRect().height
+            // Pushed to the right edge of the page, the popover has to slide back
+            root.style.marginInlineStart = `${document.documentElement.clientWidth - range.getBoundingClientRect().right - 60}px`
+            range.click()
+            const box = popover.getBoundingClientRect()
+            return {height, right: box.right, left: box.left, width: document.documentElement.clientWidth}
+        })
+        assertEquals(state.height <= 36, true)
+        assertEquals(state.right <= state.width, true)
+        assertEquals(state.left >= 0, true)
     })
 
     itWrap("a double click selects no text on a chart", "time-window", "#tw-line-a svg", async (_selection: ElementHandle) => {
@@ -411,10 +533,10 @@ describe('chart rendering', () => {
         assertEquals(/\.\d{3}/.test(state.title), true)
     })
 
-    itWrap("the control's fields hold a range to the millisecond, and an end left alone stays exact", "time-window", "#tw-fine-control input", async (_selection: ElementHandle) => {
+    itWrap("the control's fields hold a range to the millisecond, and an end left alone stays exact", "time-window", "#tw-fine-control .vtc-time-window-end input", async (_selection: ElementHandle) => {
         const state = await page.evaluate(async () => {
             const g = globalThis as unknown as {fineWindow: {getRange: () => {from: number, to: number}, setRange: (from: number, to: number) => void}}
-            const inputs = document.querySelectorAll("#tw-fine-control input") as NodeListOf<HTMLInputElement>
+            const inputs = document.querySelectorAll('#tw-fine-control input[type="datetime-local"]') as NodeListOf<HTMLInputElement>
             const shown = inputs[0].value
             const step = inputs[0].step
             const toBefore = g.fineWindow.getRange().to
@@ -428,7 +550,7 @@ describe('chart rendering', () => {
             inputs[0].value = "2026-01-01T01:00"
             inputs[0].dispatchEvent(new Event("input"))
             await new Promise(resolve => setTimeout(resolve, 320))
-            const always = (document.querySelector("#tw-always input") as HTMLInputElement)
+            const always = (document.querySelector('#tw-always input[type="datetime-local"]') as HTMLInputElement)
             return {shown, step, toBefore, typed, wide, keptTo: g.fineWindow.getRange().to, always: [always.step, always.value]}
         })
         assertEquals(state.shown, "2026-01-01T00:00:01.123")
@@ -442,7 +564,378 @@ describe('chart rendering', () => {
         assertEquals(state.always[1], "2026-01-01T00:00")
     })
 
-    itWrap("the control wraps to fit a narrow page", "time-window", "#tw-control select", async (_selection: ElementHandle) => {
+    itWrap("a ring on the live button runs to the window's next move, and the interval is written beside it", "time-window", "#tw-beating button", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const root = document.getElementById("tw-beating") as HTMLElement
+            const live = root.querySelector(".vtc-time-window-live") as HTMLButtonElement
+            const circle = root.querySelector(".vtc-time-window-ring circle") as SVGElement
+            const running = circle.getAnimations()[0]
+            const g = globalThis as unknown as {beating: {getNextTick: () => number | undefined, setLive: (live: boolean) => void, setLast: (span: number) => void}}
+            // A change that isn't a tick leaves the ring where it is
+            g.beating.setLast(1_800_000)
+            const sameAfterChange = circle.getAnimations()[0] === running
+            const timing = running.effect?.getComputedTiming()
+            const next = g.beating.getNextTick()
+            const every = (root.querySelector(".vtc-time-window-every") as HTMLElement)
+            const shownLive = getComputedStyle(every).display
+            const name = live.getAttribute("aria-label")
+            g.beating.setLive(false)
+            const stopped = {animations: circle.getAnimations().length, ring: getComputedStyle(root.querySelector(".vtc-time-window-ring")!).visibility, every: getComputedStyle(every).display, next: g.beating.getNextTick() ?? null, name: live.getAttribute("aria-label")}
+            return {sameAfterChange, duration: timing?.duration, nextOk: typeof next === "number" && next > Date.now(), text: every.textContent, shownLive, name, stopped, expected: new Intl.NumberFormat(undefined, {style: "unit", unit: "second", unitDisplay: "short"}).format(10)}
+        })
+        assertEquals(state.sameAfterChange, true)
+        assertEquals(state.duration, 10_000)
+        assertEquals(state.nextOk, true)
+        assertEquals(state.text, state.expected)
+        assertEquals(state.shownLive !== "none", true)
+        assertEquals(state.name, `live-name, ${state.expected}`)
+        assertEquals(state.stopped, {animations: 0, ring: "hidden", every: "none", next: null, name: "live-name"})
+    })
+
+    itWrap("the ring starts over at each move of the window", "time-window", "#tw-control button", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(async () => {
+            const g = globalThis as unknown as WindowGlobals
+            const circle = document.querySelector("#tw-control .vtc-time-window-ring circle") as SVGElement
+            g.shared.setLive(true)
+            const first = circle.getAnimations()[0]
+            g.clock.now += 1000
+            await new Promise(resolve => setTimeout(resolve, 150))
+            const second = circle.getAnimations()[0]
+            return {first: first !== undefined, restarted: first !== second, count: circle.getAnimations().length}
+        })
+        assertEquals(state, {first: true, restarted: true, count: 1})
+    })
+
+    itWrap("with reduced motion asked for, the ring stands full rather than moving", "time-window", "#tw-beating button", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const real = globalThis.matchMedia
+            globalThis.matchMedia = ((query: string) => /reduced-motion/.test(query) ? {matches: true} : real(query)) as typeof matchMedia
+            const g = globalThis as unknown as {beating: {setLive: (live: boolean) => void}}
+            const circle = document.querySelector("#tw-beating .vtc-time-window-ring circle") as SVGElement
+            g.beating.setLive(false)
+            g.beating.setLive(true)
+            const result = {animations: circle.getAnimations().length, offset: getComputedStyle(circle).strokeDashoffset, ring: getComputedStyle(circle.parentElement as unknown as Element).visibility}
+            globalThis.matchMedia = real
+            return result
+        })
+        assertEquals(state.animations, 0)
+        assertEquals(state.ring, "visible")
+        assertEquals(parseFloat(state.offset), 0)
+    })
+
+    itWrap("a range goes out as text and comes back, whichever form it is in", "time-window", "#tw-linked button", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(() => {
+            const g = globalThis as unknown as {linked: {toText: () => string, setFromText: (text: string) => boolean, setLast: (span: number) => void, setRange: (from: number, to: number) => void, setLive: (live: boolean) => void, getRange: () => {from: number, to: number}, isLive: () => boolean, isRelative: () => boolean, shift: (direction: number) => void, zoomOut: () => void}}
+            const w = g.linked
+            const texts: string[] = []
+            w.setLast(21_600_000)
+            texts.push(w.toText())
+            w.setLive(true)
+            texts.push(w.toText())
+            w.setLast(90_000)
+            texts.push(w.toText())
+            w.setLive(false)
+            w.setLast(1500)
+            texts.push(w.toText())
+            w.setRange(Date.UTC(2026, 0, 1, 1), Date.UTC(2026, 0, 1, 2, 0, 0, 5))
+            texts.push(w.toText())
+            const fixed = w.toText()
+            const results: Record<string, unknown> = {}
+            w.setLast(3_600_000)
+            results.fixedBack = [w.setFromText(fixed), w.getRange(), w.isRelative(), w.isLive()]
+            results.live = [w.setFromText("live-2h"), w.getRange().to - w.getRange().from, w.isRelative(), w.isLive()]
+            results.now = [w.setFromText("now-2h"), w.isRelative(), w.isLive()]
+            results.url = [w.setFromText(`https://dash.example/board/7?theme=dark&time=${fixed}#panel`), w.getRange().from]
+            results.urlEncoded = [w.setFromText(`https://dash.example/?other=1&window=${encodeURIComponent("now-15m")}`), w.getRange().to - w.getRange().from]
+            results.bad = ["", "nonsense", "12", "5 lightyears", "2026-01-02/2026-01-01", "1/2", "1/2/2026", "https://dash.example/?a=b", "https://["].map(text => w.setFromText(text))
+            w.setRange(Date.UTC(2026, 0, 1, 1), Date.UTC(2026, 0, 1, 2))
+            w.shift(-1)
+            results.shifted = w.isRelative()
+            w.setLast(3_600_000)
+            w.zoomOut()
+            results.zoomedRelative = [w.isRelative(), w.getRange().to - w.getRange().from]
+            return {texts, results}
+        })
+        assertEquals(state.texts, ["now-6h", "live-6h", "live-90s", "now-1500ms", "2026-01-01T01:00:00.000Z/2026-01-01T02:00:00.005Z"])
+        assertEquals(state.results.fixedBack, [true, {from: Date.UTC(2026, 0, 1, 1), to: Date.UTC(2026, 0, 1, 2, 0, 0, 5)}, false, false])
+        assertEquals(state.results.live, [true, 7_200_000, true, true])
+        assertEquals(state.results.now, [true, true, false])
+        assertEquals(state.results.url, [true, Date.UTC(2026, 0, 1, 1)])
+        assertEquals(state.results.urlEncoded, [true, 900_000])
+        assertEquals(state.results.bad, [false, false, false, false, false, false, false, false, false])
+        assertEquals(state.results.shifted, false)
+        assertEquals(state.results.zoomedRelative, [true, 7_200_000])
+    })
+
+    it({name: "a page opens on the range in its address, and keeps the rest of the address", ignore: selectedModules !== undefined && !selectedModules.has("time-window"), fn: async () => {
+        const fixed = "2026-01-01T01:00:00.000Z/2026-01-01T02:00:00.000Z"
+        await page.goto(`${baseUrl}/time-window?theme=dark&time=${fixed}#panel`, {waitUntil: "load"})
+        await page.waitForSelector("#tw-linked button")
+        const opened = await page.evaluate(() => {
+            const g = globalThis as unknown as {linked: {getRange: () => {from: number, to: number}, setFromText: (text: string) => boolean, setRange: (from: number, to: number) => void}, linkedMoves: {writes: number}}
+            return {range: g.linked.getRange(), writes: g.linkedMoves.writes, shown: document.querySelector("#tw-linked .vtc-time-window-range-text")?.textContent !== ""}
+        })
+        assertEquals(opened.range, {from: Date.UTC(2026, 0, 1, 1), to: Date.UTC(2026, 0, 1, 2)})
+        // Opening on a range is no reason to rewrite the address
+        assertEquals(opened.writes, 0)
+
+        await page.evaluate(() => {
+            const g = globalThis as unknown as {linked: {setRange: (from: number, to: number) => void}}
+            for (let i = 1; i <= 20; i++) {
+                g.linked.setRange(Date.UTC(2026, 0, 2, 1) + i, Date.UTC(2026, 0, 2, 2) + i)
+            }
+        })
+        await new Promise(resolve => setTimeout(resolve, 350))
+        const written = await page.evaluate(() => ({search: location.search, hash: location.hash, writes: (globalThis as unknown as {linkedMoves: {writes: number}}).linkedMoves.writes, read: new URLSearchParams(location.search).get("time")}))
+        assertEquals(written.search, "?theme=dark&time=2026-01-02T01:00:00.020Z/2026-01-02T02:00:00.020Z")
+        assertEquals(written.hash, "#panel")
+        assertEquals(written.read, "2026-01-02T01:00:00.020Z/2026-01-02T02:00:00.020Z")
+        // A burst of moves is one change of address
+        assertEquals(written.writes, 1)
+
+        await page.evaluate(() => (globalThis as unknown as {linked: {setFromText: (text: string) => boolean}}).linked.setFromText("live-30m"))
+        await new Promise(resolve => setTimeout(resolve, 350))
+        assertEquals(await page.evaluate(() => location.search), "?theme=dark&time=live-30m")
+
+        // Back or forward to an address saying something else moves the window there
+        const back = await page.evaluate(() => {
+            const g = globalThis as unknown as {linked: {getRange: () => {from: number, to: number}, isLive: () => boolean, setLive: (live: boolean) => void}}
+            g.linked.setLive(false)
+            history.pushState(null, "", `${location.pathname}?time=now-5m`)
+            dispatchEvent(new PopStateEvent("popstate"))
+            const r = g.linked.getRange()
+            return r.to - r.from
+        })
+        assertEquals(back, 300_000)
+
+        // Nonsense in an address is ignored rather than breaking the page
+        await page.goto(`${baseUrl}/time-window?time=nonsense`, {waitUntil: "load"})
+        await page.waitForSelector("#tw-linked button")
+        const ignored = await page.evaluate(() => {
+            const g = globalThis as unknown as {linked: {getRange: () => {from: number, to: number}}}
+            return g.linked.getRange().to - g.linked.getRange().from
+        })
+        assertEquals(ignored, 3_600_000)
+    }})
+
+    itWrap("the copy and paste buttons use the clipboard, and fall back on the box when they can't", "time-window", "#tw-linked button", async (_selection: ElementHandle) => {
+        const state = await page.evaluate(async () => {
+            const g = globalThis as unknown as {linked: {getRange: () => {from: number, to: number}, setLast: (span: number) => void, setRange: (from: number, to: number) => void}}
+            const root = document.getElementById("tw-linked") as HTMLElement
+            const range = root.querySelector(".vtc-time-window-range") as HTMLButtonElement
+            const filter = root.querySelector(".vtc-time-window-filter") as HTMLInputElement
+            const popover = root.querySelector(".vtd-popover-content") as HTMLElement
+            const copy = root.querySelector('[aria-label="copy-name"]') as HTMLButtonElement
+            const paste = root.querySelector('[aria-label="paste-name"]') as HTMLButtonElement
+            const tick = () => new Promise(resolve => setTimeout(resolve, 10))
+            let clipboard = ""
+            const fake = {writeText: (text: string) => {clipboard = text; return Promise.resolve()}, readText: () => Promise.resolve(clipboard)}
+            Object.defineProperty(navigator, "clipboard", {configurable: true, value: fake})
+            const out: Record<string, unknown> = {}
+
+            g.linked.setRange(Date.UTC(2026, 0, 1, 1), Date.UTC(2026, 0, 1, 2))
+            range.click()
+            const iconBefore = copy.innerHTML.length
+            copy.click()
+            await tick()
+            out.copied = clipboard
+            out.copyStaysOpen = !!popover.classList.contains("vtd-popover-open")
+            out.iconChanged = copy.innerHTML.length !== iconBefore
+
+            g.linked.setLast(3_600_000)
+            paste.click()
+            await tick()
+            out.pasted = g.linked.getRange()
+            out.pasteCloses = !popover.classList.contains("vtd-popover-open")
+
+            // Something on the clipboard that isn't a range
+            clipboard = "a shopping list"
+            range.click()
+            paste.click()
+            await tick()
+            out.badPaste = [filter.getAttribute("aria-invalid"), !!popover.classList.contains("vtd-popover-open"), filter.value]
+
+            // The browser refusing: paste goes to the box, and copy leaves the text selected there
+            fake.readText = () => Promise.reject(new Error("denied"))
+            fake.writeText = () => Promise.reject(new Error("denied"))
+            filter.value = ""
+            ;(document.activeElement as HTMLElement)?.blur()
+            paste.click()
+            await tick()
+            out.refusedPaste = document.activeElement === filter
+            g.linked.setRange(Date.UTC(2026, 0, 3), Date.UTC(2026, 0, 4))
+            copy.click()
+            await tick()
+            out.refusedCopy = [filter.value, filter.selectionStart, filter.selectionEnd === filter.value.length, document.activeElement === filter]
+
+            // Pasting straight into the box applies a whole range, and leaves anything else as typing
+            const pasteIn = (text: string) => {
+                const data = new DataTransfer()
+                data.setData("text", text)
+                const event = new ClipboardEvent("paste", {clipboardData: data, bubbles: true, cancelable: true})
+                filter.dispatchEvent(event)
+                return event.defaultPrevented
+            }
+            out.pasteOther = [pasteIn("hello"), !!popover.classList.contains("vtd-popover-open")]
+            out.pasteRange = [pasteIn("https://dash.example/board?time=now-20m"), !popover.classList.contains("vtd-popover-open"), g.linked.getRange().to - g.linked.getRange().from]
+            delete (navigator as unknown as {clipboard?: unknown}).clipboard
+            return out
+        })
+        assertEquals(state.copied, "2026-01-01T01:00:00.000Z/2026-01-01T02:00:00.000Z")
+        assertEquals(state.copyStaysOpen, true)
+        assertEquals(state.iconChanged, true)
+        assertEquals(state.pasted, {from: Date.UTC(2026, 0, 1, 1), to: Date.UTC(2026, 0, 1, 2)})
+        assertEquals(state.pasteCloses, true)
+        assertEquals(state.badPaste, ["true", true, "a shopping list"])
+        assertEquals(state.refusedPaste, true)
+        assertEquals(state.refusedCopy, ["2026-01-03T00:00:00.000Z/2026-01-04T00:00:00.000Z", 0, true, true])
+        assertEquals(state.pasteOther, [false, true])
+        assertEquals(state.pasteRange, [true, true, 1_200_000])
+    })
+
+    itWrap("flush right, what opens from the range opens leftward, under it", "time-window", "#tw-control button", async (_selection: ElementHandle) => {
+        await page.setViewportSize({width: 1000, height: 400})
+        try {
+            const state = await page.evaluate(() => {
+                const root = document.getElementById("tw-control") as HTMLElement
+                const control = root.querySelector(".vtc-time-window") as HTMLElement
+                const range = root.querySelector(".vtc-time-window-range") as HTMLButtonElement
+                const popover = root.querySelector(".vtd-popover-content") as HTMLElement
+                const open = () => {
+                    range.click()
+                    const box = popover.getBoundingClientRect()
+                    const anchor = root.querySelector(".vtd-popover")!.getBoundingClientRect()
+                    range.click()
+                    return {left: box.left - anchor.left, right: box.right - anchor.right, onPage: box.left >= 0 && box.right <= document.documentElement.clientWidth}
+                }
+                const onLeft = open()
+                control.style.justifyContent = "flex-end"
+                return {onLeft, onRight: open()}
+            })
+            // Up against the page's left edge, it keeps its small margin from that edge
+            assertEquals(state.onLeft.left >= 0 && state.onLeft.left <= 8, true)
+            assertEquals(state.onLeft.onPage, true)
+            assertEquals(Math.abs(state.onRight.right) < 1, true)
+            assertEquals(state.onRight.onPage, true)
+        } finally {
+            await page.setViewportSize({width: 400, height: 200})
+        }
+    })
+
+    itWrap("which way it opens can be chosen, and either way it stays on the page", "time-window", "#tw-opens-leftward button", async (_selection: ElementHandle) => {
+        await page.setViewportSize({width: 1000, height: 400})
+        try {
+            const state = await page.evaluate(() => {
+                const open = (id: string, place: (control: HTMLElement) => void) => {
+                    const root = document.getElementById(id) as HTMLElement
+                    const control = root.querySelector(".vtc-time-window") as HTMLElement
+                    const range = root.querySelector(".vtc-time-window-range") as HTMLButtonElement
+                    const popover = root.querySelector(".vtd-popover-content") as HTMLElement
+                    place(control)
+                    range.click()
+                    const box = popover.getBoundingClientRect()
+                    const anchor = root.querySelector(".vtd-popover")!.getBoundingClientRect()
+                    range.click()
+                    return {left: box.left - anchor.left, right: box.right - anchor.right, onPage: box.left >= 0 && box.right <= document.documentElement.clientWidth}
+                }
+                const leftOfMiddle = (control: HTMLElement) => {
+                    control.style.marginInlineStart = "440px"
+                }
+                const rightOfMiddle = (control: HTMLElement) => {
+                    control.style.marginInlineStart = "500px"
+                }
+                return {
+                    // Each against what auto would have done there
+                    leftward: open("tw-opens-leftward", leftOfMiddle),
+                    rightward: open("tw-opens-rightward", rightOfMiddle),
+                    // Asked to run off the page, it slides back on
+                    rightwardAtEdge: open("tw-opens-rightward", control => {
+                        control.style.marginInlineStart = "800px"
+                    }),
+                    leftwardAtEdge: open("tw-opens-leftward", control => {
+                        control.style.marginInlineStart = "0"
+                    }),
+                }
+            })
+            assertEquals(Math.abs(state.leftward.right) < 1, true)
+            assertEquals(Math.abs(state.rightward.left) < 1, true)
+            assertEquals(state.rightwardAtEdge.onPage, true)
+            assertEquals(state.leftwardAtEdge.onPage, true)
+        } finally {
+            await page.setViewportSize({width: 400, height: 200})
+        }
+    })
+
+    itWrap("on a short screen, what opens from the range scrolls rather than running off the bottom", "time-window", "#tw-control button", async (_selection: ElementHandle) => {
+        await page.setViewportSize({width: 400, height: 220})
+        try {
+            const state = await page.evaluate(() => {
+                const root = document.getElementById("tw-control") as HTMLElement
+                const popover = root.querySelector(".vtd-popover-content") as HTMLElement
+                // Pinned near the top, as a bar that stays put is, so there is a known amount of room below it
+                root.style.cssText = "position:fixed;top:40px;left:0;width:100%;"
+                ;(root.querySelector(".vtc-time-window-range") as HTMLButtonElement).click()
+                return {bottom: popover.getBoundingClientRect().bottom, height: innerHeight, scrolls: popover.scrollHeight > popover.clientHeight}
+            })
+            assertEquals(state.bottom <= state.height, true)
+            assertEquals(state.scrolls, true)
+        } finally {
+            await page.setViewportSize({width: 400, height: 200})
+        }
+    })
+
+    itWrap("what opens from the range stays on the page as the page changes under it", "time-window", "#tw-control button", async (_selection: ElementHandle) => {
+        const read = () => page.evaluate(() => {
+            const popover = document.querySelector("#tw-control .vtd-popover-content") as HTMLElement
+            const box = popover.getBoundingClientRect()
+            return {left: box.left, right: box.right, bottom: box.bottom, width: document.documentElement.clientWidth, height: innerHeight, slide: popover.style.translate, shut: !popover.classList.contains("vtd-popover-open")}
+        })
+        const settle = async () => {
+            await new Promise(resolve => setTimeout(resolve, 100))
+            await settleFrames()
+        }
+        await page.setViewportSize({width: 1000, height: 500})
+        try {
+            await page.evaluate(() => {
+                const root = document.getElementById("tw-control") as HTMLElement
+                root.style.cssText = "position:fixed;top:40px;left:0;width:100%;"
+                ;(root.querySelector(".vtc-time-window") as HTMLElement).style.justifyContent = "flex-end"
+                ;(root.querySelector(".vtc-time-window-range") as HTMLButtonElement).click()
+            })
+            await settle()
+            const wide = await read()
+            assertEquals(wide.shut, false)
+
+            await page.setViewportSize({width: 600, height: 500})
+            await settle()
+            const narrower = await read()
+            assertEquals(narrower.left >= 0 && narrower.right <= narrower.width, true)
+
+            await page.setViewportSize({width: 340, height: 500})
+            await settle()
+            const narrowest = await read()
+            assertEquals(narrowest.left >= 0 && narrowest.right <= narrowest.width, true)
+
+            await page.setViewportSize({width: 1000, height: 260})
+            await settle()
+            const short = await read()
+            assertEquals(short.left >= 0 && short.right <= short.width, true)
+            assertEquals(short.bottom <= short.height, true)
+
+            // Shut, it listens to nothing
+            await page.evaluate(() => {
+                (document.querySelector("#tw-control .vtc-time-window-range") as HTMLButtonElement).click()
+            })
+            const before = (await read()).slide
+            await page.setViewportSize({width: 500, height: 400})
+            await settle()
+            assertEquals((await read()).slide, before)
+        } finally {
+            await page.setViewportSize({width: 400, height: 200})
+        }
+    })
+
+    itWrap("the control wraps to fit a narrow page", "time-window", "#tw-control button", async (_selection: ElementHandle) => {
         const state = await page.evaluate(() => {
             const host = document.getElementById("tw-control") as HTMLElement
             host.style.width = "320px"
@@ -453,22 +946,30 @@ describe('chart rendering', () => {
         assertEquals(state, true)
     })
 
-    itWrap("the control assumes no language: names and preset words come from the consumer or the browser", "time-window", "#tw-labelled select", async (_selection: ElementHandle) => {
+    itWrap("the control assumes no language: names and preset words come from the consumer or the browser", "time-window", "#tw-labelled button", async (_selection: ElementHandle) => {
         const state = await page.evaluate(() => {
             const named = document.getElementById("tw-labelled") as HTMLElement
             const plain = document.getElementById("tw-utc") as HTMLElement
+            const range = named.querySelector(".vtc-time-window-range") as HTMLButtonElement
             return {
-                names: Array.from(named.querySelectorAll("button,select,input")).map(el => el.getAttribute("aria-label")),
-                options: Array.from(named.querySelectorAll("option")).filter(o => !o.hidden).map(o => o.textContent),
+                names: Array.from(named.querySelectorAll("button:not(.vtc-time-window-list .vtd-button),input")).map(el => el.getAttribute("aria-label")),
+                rangeName: range.getAttribute("aria-label"),
+                options: Array.from(named.querySelectorAll(".vtc-time-window-list .vtd-button")).filter(o => !(o as HTMLElement).hidden).map(o => o.textContent),
+                ends: Array.from(named.querySelectorAll(".vtc-time-window-end")).map(end => end.firstChild?.textContent),
                 expected: new Intl.NumberFormat(undefined, {style: "unit", unit: "hour", unitDisplay: "short"}).format(2),
                 plainNames: Array.from(plain.querySelectorAll("[aria-label]")).length,
                 plainLive: plain.querySelector(".vtc-time-window-live") === null,
+                plainEnds: Array.from(plain.querySelectorAll(".vtc-time-window-end")).map(end => end.textContent),
+                zone: plain.querySelector(".vtc-time-window-zone")?.textContent,
             }
         })
-        assertEquals(state.names, ["prev-name", "next-name", "list-name", "from-name", "to-name", "out-name", "live-name"])
+        assertEquals(state.names, ["prev-name", "range-name: Une heure", "filter-name", "copy-name", "paste-name", "from-name", "to-name", "next-name", "out-name", "live-name"])
         assertEquals(state.options, ["Une heure", state.expected])
+        assertEquals(state.ends, ["from-name", "to-name"])
         assertEquals(state.plainNames, 0)
         assertEquals(state.plainLive, true)
+        assertEquals(state.plainEnds, ["", ""])
+        assertEquals(state.zone, "UTC")
     })
 
     itWrap("charts draw a line per series, with axis ticks and a legend", "charts", "#default-line-chart", async (_selection: ElementHandle) => {

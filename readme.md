@@ -6,8 +6,8 @@ the chart's width, and each chart with tabular values exposes them to screen rea
 visually-hidden table. A `renderer="canvas"` option paints dense marks on a canvas instead, under the
 same SVG axes.
 
-[velodesign](https://jsr.io/@velotype/velodesign) keeps a few basic charts for the most common needs.
-velochart is where chart types and features go beyond those.
+It is built on [velodesign](https://jsr.io/@velotype/velodesign), the general component library, so its
+legends, buttons and other controls are velodesign's.
 
 **[Showcase](https://velotype.github.io/velochart/)** - every chart, live, with its attributes.
 
@@ -42,7 +42,7 @@ replaceElementWithRoot(
 
 ## Theming
 
-velochart depends on velotype alone, and takes its colours from CSS custom properties: `--text`,
+velochart takes its colours from CSS custom properties: `--text`,
 `--background` and its `--background-1` to `--background-9` ramp, and `--primary`, `--secondary`,
 `--accent`, `--warning` with their `-7` steps. velodesign's `Theme.injectStyles()` defines all of
 them, so a page using velodesign needs nothing more. A page without velodesign has to define those
@@ -103,9 +103,11 @@ any chart move them all, with their hover cursors shared.
 import { LineChart, TimeWindow, TimeWindowControl } from "@velotype/velochart"
 
 const HOUR = 3_600_000
-const timeWindow = new TimeWindow({span: 6 * HOUR})
+// urlParam keeps the range in the address, so a link opens on the same range
+const timeWindow = new TimeWindow({span: 6 * HOUR, urlParam: "time"})
 
-<TimeWindowControl timeWindow={timeWindow} labels={{previous: "Earlier", next: "Later", live: "Live"}}/>
+// Flush right is where a dashboard's time control usually goes
+<TimeWindowControl timeWindow={timeWindow} style={{justifyContent: "flex-end"}} labels={{previous: "Earlier", next: "Later", live: "Live"}}/>
 <LineChart timeWindow={timeWindow} data={latency} series={latencySeries} xAxis={{type: "time"}}/>
 <LineChart timeWindow={timeWindow} data={traffic} series={trafficSeries} xAxis={{type: "time"}}/>
 

@@ -33,6 +33,8 @@ const root = new URL("../", import.meta.url).pathname
 const entrypoint = `${root}src/index.ts`
 
 const velotypeSpecifiers = ["@velotype/velotype", "@velotype/velotype/jsx-runtime"]
+/** Held out too for `own`, since an app on velochart's family already has what it uses of velodesign */
+const sharedSpecifiers = [...velotypeSpecifiers, "@velotype/velodesign"]
 
 /** Bundles one entrypoint the way a browser consumer would and returns the text */
 async function bundleText(entry: string, external: string[]): Promise<string> {
@@ -55,27 +57,31 @@ async function bundleText(entry: string, external: string[]): Promise<string> {
 }
 
 /**
- * Asserts that holding velotype out leaves exactly one import statement.
+ * Asserts that holding velotype and velodesign out leaves one import statement per barrel.
  *
- * Nothing in `src/` may import `@velotype/velotype` except `src/core/velotype.ts`, so a correct
- * bundle has one statement and no more. The failure this catches is invisible otherwise: an import
+ * Nothing in `src/` may import `@velotype/velotype` except `src/core/velotype.ts` and the JSX factory
+ * `src/core/jsx.ts`, or `@velotype/velodesign` except `src/core/velodesign.ts`. The failure this catches is invisible otherwise: an import
  * that goes around the barrel still compiles, still renders, and only shows up as bytes - in *every*
  * consumer bundle, because esbuild keeps an external import statement for every module it scanned
- * whether or not that module survived tree-shaking. A package with no `.tsx` in `src/` has no JSX
- * factory module; adding one (the way velodesign has `src/core/jsx.ts`) makes this two.
+ * whether or not that module survived tree-shaking.
  */
 function assertBarrelled(text: string): void {
     const statements = text.match(/import(?:\{[^}]*\}from)?"@velotype\/velotype(?:\/jsx-runtime)?";?/g) ?? []
-    if (statements.length != 1) {
-        throw new Error(`expected 1 velotype import statement in the externalized bundle, found ${statements.length}.` +
+    if (statements.length > 2) {
+        throw new Error(`expected at most 2 velotype import statements in the externalized bundle, found ${statements.length}.` +
             ` Something in src/ imports "@velotype/velotype" directly instead of through src/core/velotype.ts.`)
+    }
+    const shared = text.match(/import(?:\{[^}]*\}from)?"@velotype\/velodesign";?/g) ?? []
+    if (shared.length > 1) {
+        throw new Error(`expected at most 1 velodesign import statement in the externalized bundle, found ${shared.length}.` +
+            ` Something in src/ imports "@velotype/velodesign" directly instead of through src/core/velodesign.ts.`)
     }
 }
 
 async function measure(): Promise<{raw: number, gzip: number, ownRaw: number, ownGzip: number}> {
     const encoder = new TextEncoder()
     const inlined = encoder.encode(await bundleText(entrypoint, []))
-    const ownText = await bundleText(entrypoint, velotypeSpecifiers)
+    const ownText = await bundleText(entrypoint, sharedSpecifiers)
     assertBarrelled(ownText)
     const own = encoder.encode(ownText)
     return {
@@ -141,6 +147,6 @@ if (Deno.args.includes("--json")) {
     }
     console.log(`velochart bundled from src/index.ts, minified`)
     console.log(`  velochart alone   raw ${formatBytes(sizes.ownRaw)}  gzip ${formatBytes(sizes.ownGzip)}`)
-    console.log(`  velotype inlined   raw ${formatBytes(sizes.raw)}  gzip ${formatBytes(sizes.gzip)}`)
-    console.log(`  velotype's share   raw ${formatBytes(sizes.raw - sizes.ownRaw)}  gzip ${formatBytes(sizes.gzip - sizes.ownGzip)}`)
+    console.log(`  all inlined        raw ${formatBytes(sizes.raw)}  gzip ${formatBytes(sizes.gzip)}`)
+    console.log(`  the shared part    raw ${formatBytes(sizes.raw - sizes.ownRaw)}  gzip ${formatBytes(sizes.gzip - sizes.ownGzip)}`)
 }

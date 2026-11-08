@@ -59,6 +59,16 @@ const fine = expose("fine", getComponent<LineChart>(<LineChart data={finePoints}
 const narrowFine = getComponent<LineChart>(<LineChart data={finePoints} series={[{key: "v"}]} timeWindow={fineWindow} xAxis={{type: "time", utc: true}} height={120}/>)
 const alwaysWindow = new TimeWindow({range: {from: start, to: start + 6 * HOUR}, now: () => clock.now})
 
+// One whose clock is slow enough for a test to look at the ring, and one kept in the page's address
+const beating = expose("beating", new TimeWindow({span: HOUR, live: true, refreshMs: 10_000, now: () => clock.now}))
+const linked = expose("linked", new TimeWindow({span: HOUR, urlParam: "time", now: () => clock.now}))
+const linkedMoves = expose("linkedMoves", {writes: 0})
+const realReplaceState = history.replaceState.bind(history)
+history.replaceState = (...args: Parameters<History["replaceState"]>) => {
+    linkedMoves.writes++
+    realReplaceState(...args)
+}
+
 const labelled = expose("labelled", new TimeWindow({span: HOUR, now: () => clock.now}))
 const utcWindow = expose("utcWindow", new TimeWindow({range: {from: start, to: start + HOUR}, now: () => clock.now}))
 
@@ -76,11 +86,15 @@ class TimeWindowModule extends Component<EmptyAttrs> {
             <div id="tw-narrow-fine" style={{width: "240px"}}>{narrowFine}</div>
             <div id="tw-fine-control"><TimeWindowControl timeWindow={fineWindow} utc/></div>
             <div id="tw-always"><TimeWindowControl timeWindow={alwaysWindow} utc precision="millisecond"/></div>
+            <div id="tw-beating"><TimeWindowControl timeWindow={beating} labels={{live: "live-name"}}/></div>
+            <div id="tw-linked"><TimeWindowControl timeWindow={linked} labels={{copy: "copy-name", paste: "paste-name"}}/></div>
+            <div id="tw-opens-leftward"><TimeWindowControl timeWindow={labelled} opens="leftward"/></div>
+            <div id="tw-opens-rightward"><TimeWindowControl timeWindow={labelled} opens="rightward"/></div>
             <div id="tw-control"><TimeWindowControl timeWindow={shared} utc/></div>
             <div id="tw-labelled"><TimeWindowControl
                 timeWindow={labelled}
                 presets={[{span: HOUR, label: "Une heure"}, {span: 2 * HOUR}]}
-                labels={{previous: "prev-name", next: "next-name", zoomOut: "out-name", live: "live-name", presets: "list-name", from: "from-name", to: "to-name"}}/></div>
+                labels={{previous: "prev-name", next: "next-name", zoomOut: "out-name", live: "live-name", range: "range-name", filter: "filter-name", copy: "copy-name", paste: "paste-name", from: "from-name", to: "to-name"}}/></div>
             <div id="tw-utc"><TimeWindowControl timeWindow={utcWindow} utc hideLive/></div>
         </TestModulePage>
     }

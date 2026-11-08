@@ -15,7 +15,7 @@
  *
  * `scripts/bundle-size.ts` asserts the bundle has exactly one import statement for velotype.
  */
-export { Component, passthroughAttrsToElement, setStylesheet } from "@velotype/velotype"
+export { Component, getComponent, passthroughAttrsToElement, setStylesheet } from "@velotype/velotype"
 export type {
     EmptyAttrs,
     FunctionComponent,

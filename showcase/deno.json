@@ -18,7 +18,7 @@
     "imports": {
         "@velotype/veloserver": "jsr:@velotype/veloserver@^0.2.0",
         "@velotype/velochart": "../src/index.ts",
-        "@velotype/velodesign": "jsr:@velotype/velodesign@^0.2.0",
+        "@velotype/velodesign": "../../velodesign/src/index.ts",
         "@velotype/velotype/jsx-runtime": "jsr:@velotype/velotype@^0.3.1",
         "@velotype/velotype": "jsr:@velotype/velotype@^0.3.1"
     },

@@ -15,7 +15,7 @@ const MINUTE = 60 * SECOND
 const HOUR = 60 * MINUTE
 const DAY = 24 * HOUR
 
-const labels = {previous: "Earlier", next: "Later", zoomOut: "Zoom out", live: "Live", presets: "Time range", from: "From", to: "To"}
+const labels = {previous: "Earlier", next: "Later", zoomOut: "Zoom out", live: "Live", range: "Time range", filter: "Type a range", copy: "Copy this range", paste: "Paste a range", from: "From", to: "To"}
 
 let areStylesMounted = false
 
@@ -34,6 +34,10 @@ background-color:var(--background);
 border:1px solid var(--background-4);
 border-radius:0.5rem;
 }
+/* Flush right, where a dashboard's time control usually is, and with anything else in the bar on the left */
+.vtc-dash-toolbar .vtc-time-window{justify-content:flex-end;}
+.vtc-dash-toolbar-row{display:flex;flex-wrap:wrap;align-items:center;gap:0.5rem;}
+.vtc-dash-toolbar-row .vtc-time-window{margin-inline-start:auto;}
 .vtc-dash-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(10em,100%),1fr));gap:0.5rem;}
 .vtc-dash-panels{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(20em,100%),1fr));gap:0.5rem;}
 /* A lone last panel takes the row rather than leaving a hole beside it. In one column this changes nothing */
@@ -83,7 +87,7 @@ type ServiceRow = {
  * request. The tiles and the panels without a time axis add up what is in view once it stops moving.
  */
 export class ServiceOverviewDashboard extends Component<EmptyAttrs> {
-    #timeWindow = new TimeWindow({span: 6 * HOUR})
+    #timeWindow = new TimeWindow({span: 6 * HOUR, urlParam: "time"})
     #leave: (() => void) | undefined
     #requests = new RenderBasic<string>("")
     #errorRate = new RenderBasic<string>("")
@@ -203,7 +207,7 @@ function liveRow(time: number): {x: number, values: {cpu: number, memory: number
  * the button or by dragging a range on a chart, holds the view still for a look while the feed carries on.
  */
 export class LiveDashboard extends Component<EmptyAttrs> {
-    #timeWindow = new TimeWindow({span: 5 * MINUTE, live: true, refreshMs: SECOND})
+    #timeWindow = new TimeWindow({span: 5 * MINUTE, live: true, refreshMs: SECOND, urlParam: "time"})
     #timer = 0
     #charts: (LineChart | AreaChart | BarChart)[] = []
     #cpu: Gauge | undefined
@@ -298,7 +302,7 @@ function queryMetrics(range: TimeRange): Promise<QueryResult> {
  * used, so a slow reply to an old range can't paint over a newer one, and the rollup follows the span.
  */
 export class QueryDashboard extends Component<EmptyAttrs> {
-    #timeWindow = new TimeWindow({span: 6 * HOUR})
+    #timeWindow = new TimeWindow({span: 6 * HOUR, refreshMs: 5 * SECOND, urlParam: "time"})
     #leave: (() => void) | undefined
     #charts: (LineChart | AreaChart | BarChart)[] = []
     #status = new RenderBasic<string>("")
@@ -316,10 +320,10 @@ export class QueryDashboard extends Component<EmptyAttrs> {
         ]
         this.#host = <div class="vtc-dash">
             <div class="vtc-dash-toolbar">
-                <Stack direction="column" gap="xs">
-                    <TimeWindowControl timeWindow={timeWindow} hideLive labels={labels}/>
+                <div class="vtc-dash-toolbar-row">
                     <Text type="muted" numeric>{this.#status}</Text>
-                </Stack>
+                    <TimeWindowControl timeWindow={timeWindow} labels={labels}/>
+                </div>
             </div>
             <div class="vtc-dash-panels">
                 {this.#charts.map(chart => <Card>{chart}</Card>)}
@@ -340,7 +344,10 @@ export class QueryDashboard extends Component<EmptyAttrs> {
 
     async #load(range: TimeRange): Promise<void> {
         const request = ++this.#latest
-        this.#host?.classList.add("vtc-dash-busy")
+        // A refresh every few seconds shouldn't dim the page every few seconds
+        if (!this.#timeWindow.isLive()) {
+            this.#host?.classList.add("vtc-dash-busy")
+        }
         this.#host?.setAttribute("aria-busy", "true")
         this.#status.value = `Querying ${new Date(range.from).toLocaleString()} to ${new Date(range.to).toLocaleString()}`
         const result = await queryMetrics(range)

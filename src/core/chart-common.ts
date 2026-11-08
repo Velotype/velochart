@@ -1,5 +1,6 @@
+import { h } from "./jsx.ts"
+import { Button, Stack, Text } from "./velodesign.ts"
 import { mountStyles } from "./styles.ts"
-import type { EmptyAttrs, FunctionComponent } from "./velotype.ts"
 
 /**
  * Shared internals for every chart in this package.
@@ -41,8 +42,6 @@ export function svgEl(tag: string, attrs?: Record<string, string | number | unde
  */
 export const ChartThemeOptions: {
     seriesColors: string[]
-    /** Shown in place of a chart with no data (default: the U+2205 glyph) */
-    emptySymbol: FunctionComponent<EmptyAttrs>
     /** Every chart fills with patterns as well as color, unless its own `patterns` says otherwise (default: `false`) */
     patterns: boolean
 } = {
@@ -57,7 +56,6 @@ export const ChartThemeOptions: {
         "var(--accent-7)",
         "var(--warning-7)"
     ],
-    emptySymbol: function(){return "∅"}
 }
 
 /** Resolves a series' color: its own if it set one, otherwise its slot in the palette */
@@ -202,7 +200,7 @@ export type ChartBaseAttrsType = {
     ariaLabel?: string
     /** Formats a value for axis ticks and tooltips (default: `String`) */
     formatValue?: (value: number) => string
-    /** Shown when there is nothing to draw (default: `ChartThemeOptions.emptySymbol`) */
+    /** Said when there is nothing to draw, under velodesign's `Empty` symbol (default: the symbol alone) */
     emptyMessage?: string
     /** Hides the legend even when there is more than one series (default: `false`) */
     hideLegend?: boolean
@@ -341,15 +339,9 @@ export function mountChartStyles(): void {
 .vtc-chart-sector{fill:transparent;}
 .vtc-chart-axis-title{fill:var(--background-7);font-size:0.85em;font-weight:500;font-family:inherit;text-anchor:middle;}
 .vtc-chart-tick-y2{text-anchor:start;dominant-baseline:middle;}
-.vtc-chart-empty{
-display:flex;
-align-items:center;
-justify-content:center;
-color:var(--background-6);
-font-size:2em;
-line-height:1;
-}
+.vtc-chart-empty{display:flex;align-items:center;justify-content:center;}
 .vtc-chart-empty[hidden]{display:none;}
+.vtc-chart-empty .vtd-empty{padding:0;}
 ` +
 /* Legend */
 `
@@ -368,11 +360,6 @@ color:var(--text);
 text-align:center;
 }
 .vtc-chart-legend{
-display:flex;
-flex-wrap:wrap;
-align-items:center;
-justify-content:center;
-gap:0.25em 1em;
 font-size:0.85em;
 color:var(--background-6);
 }
@@ -384,9 +371,9 @@ color:var(--background-6);
 `
 .vtc-chart-legend-item{display:inline-flex;align-items:center;gap:0.4em;color:var(--text);font-weight:500;}
 .vtc-chart-legend-swatch{width:0.75em;height:0.75em;border-radius:0.15em;flex-shrink:0;}
-.vtc-chart-legend-toggle{appearance:none;border:0;background:none;padding:0.1em 0.2em;margin:0;font:inherit;cursor:pointer;border-radius:0.25em;}
-.vtc-chart-legend-toggle:hover{background-color:var(--background-2);}
-.vtc-chart-legend-toggle[aria-pressed="false"]{color:var(--background-6);text-decoration:line-through;}
+.vtc-chart-legend .vtc-chart-legend-toggle{min-height:0;padding:0.1em 0.2em;font:inherit;font-weight:500;color:var(--text);}
+.vtc-chart-legend-toggle>span{display:inline-flex;align-items:center;gap:0.4em;}
+.vtc-chart-legend .vtc-chart-legend-toggle[aria-pressed="false"]{color:var(--background-6);text-decoration:line-through;}
 .vtc-chart-legend-toggle[aria-pressed="false"] .vtc-chart-legend-swatch{opacity:0.3;}
 .vtc-chart-enter .vtc-chart-marks{animation:vtc-chart-reveal 0.5s ease-out;}
 .vtc-chart-enter .vtc-chart-marks-radial{animation:vtc-chart-grow 0.4s ease-out;transform-box:fill-box;transform-origin:center;}
@@ -431,17 +418,7 @@ export function buildLegend(
     if (entries.length === 0) {
         return undefined
     }
-    const legend = document.createElement("div")
-    legend.className = "vtc-chart-legend"
-    entries.forEach((entry, index) => {
-        // A real button when it does something, so keyboard and screen reader support come with it
-        const item = document.createElement(onToggle ? "button" : "span")
-        item.className = "vtc-chart-legend-item"
-        if (onToggle) {
-            (item as HTMLButtonElement).type = "button"
-            item.classList.add("vtc-chart-legend-toggle")
-            item.addEventListener("click", () => onToggle(index))
-        }
+    const items = entries.map((entry, index) => {
         const swatch = document.createElement("span")
         swatch.className = "vtc-chart-legend-swatch"
         swatch.style.backgroundColor = entry.color
@@ -449,12 +426,13 @@ export function buildLegend(
             swatch.style.backgroundImage = swatchBackground(index)
             swatch.style.backgroundSize = "6px 6px"
         }
-        const text = document.createElement("span")
-        text.textContent = entry.label
-        item.appendChild(swatch)
-        item.appendChild(text)
-        legend.appendChild(item)
+        const label = h("span", null, entry.label)
+        // A real button when it does something, so keyboard and screen reader support come with it
+        return onToggle
+            ? h(Button, {type: "text", class: "vtc-chart-legend-item vtc-chart-legend-toggle", onClick: () => onToggle(index)}, swatch, label)
+            : h(Text, {class: "vtc-chart-legend-item"}, swatch, label)
     })
+    const legend: HTMLDivElement = h(Stack, {class: "vtc-chart-legend", align: "center", justify: "center", gap: "0.25em 1em"}, ...items)
     return legend
 }
 
