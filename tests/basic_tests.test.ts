@@ -1041,11 +1041,18 @@ describe('chart rendering', () => {
         const state = await page.evaluate(() => {
             const root = document.getElementById("empty-line-chart") as HTMLElement
             const empty = root.querySelector(".vtc-chart-empty") as HTMLElement
-            return {svgs: root.querySelectorAll("svg").length, emptyShown: !empty.hidden, text: empty.innerText.trim()}
+            // The empty state's symbol is velodesign's emptySymbol, by default a glyph drawn as an
+            // <svg>, so only an <svg> outside the empty state counts as a chart drawing
+            const drawings = Array.from(root.querySelectorAll("svg")).filter(svg => !empty.contains(svg))
+            return {
+                svgs: drawings.length,
+                emptyShown: !empty.hidden,
+                hasSymbol: empty.querySelector("svg") != null || empty.innerText.trim().length > 0
+            }
         })
         if (state.svgs != 0) {fail("ERROR: expected no drawing at all for empty data")}
         if (!state.emptyShown) {fail("ERROR: expected the empty state to be visible")}
-        if (state.text.length == 0) {fail("ERROR: expected the empty state to render its symbol")}
+        if (!state.hasSymbol) {fail("ERROR: expected the empty state to render its symbol")}
     })
 
     itWrap("charts render a donut's hole and centre label", "charts", "#donut-pie-chart", async (_selection: ElementHandle) => {
