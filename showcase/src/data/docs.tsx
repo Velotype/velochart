@@ -224,7 +224,6 @@ const chartThemeOptions: TypeDoc = {
     description: "Shared by every chart, which is what keeps a dashboard's series colours consistent.",
     fields: [
         {name: "seriesColors", type: "string[]", defaultValue: "eight slots built from the theme's four hues at two lightness steps", description: "The palette each series is drawn from, in order. Never a hex literal in a chart itself - a literal looks right in one theme and wrong in the other."},
-        {name: "emptySymbol", type: "FunctionComponent<EmptyAttrs>", defaultValue: "the U+2205 glyph", description: "Shown when a chart has nothing to draw. The glyph alone, with no sizing of its own."},
         {name: "patterns", type: "boolean", defaultValue: "false", description: "Every chart fills with patterns as well as color, unless its own patterns attr says otherwise."},
     ],
 }
@@ -235,7 +234,7 @@ const frameAttrs: AttrDoc[] = [
     {name: "height", type: "number", defaultValue: "220", description: "Drawing height in px, excluding the legend. Width follows the container."},
     {name: "formatValue", type: "(n: number) => string", defaultValue: "String", description: "Formats ticks, tooltips and the hidden table, so what is read aloud matches what is drawn."},
     {name: "ariaLabel", type: "string", description: "Accessible name, used as the caption of the visually-hidden data table a screen reader reads in place of the drawing."},
-    {name: "emptyMessage", type: "string", defaultValue: "ChartThemeOptions.emptySymbol", description: "Shown when there is nothing to draw."},
+    {name: "emptyMessage", type: "string", defaultValue: "the symbol of velodesign's Empty alone", description: "Shown when there is nothing to draw."},
     {name: "hideLegend", type: "boolean", defaultValue: "false", description: "Hides the legend."},
     {name: "legendToggle", type: "boolean", defaultValue: "true", description: "Lets a reader hide and show entries by clicking the legend."},
     {name: "animate", type: "boolean", defaultValue: "true", description: "Animates the first drawing and changes of data, unless the reader asked for reduced motion."},
@@ -743,19 +742,23 @@ const dashboardDocs: ComponentDoc[] = [
         name: "TimeWindowControl",
         group: "Dashboard",
         slug: "time-window-control",
-        description: "One control for the time range of a whole page. Give every chart the same TimeWindow, and the control, a drag on any chart and a zoom on any chart all move them together.",
+        description: "One control for the time range of a whole page: the range in one line, and the rest in what opens from it, where a range can be picked or typed as 13h or now-30d. Give every chart the same TimeWindow, and the control, a drag on any chart and a zoom on any chart all move them together. Its usual place is flush right at the top of the page.",
         kind: "component",
         attrs: [
             {name: "timeWindow", type: "TimeWindow", required: true, description: "The window this controls, which the charts on the page share."},
-            {name: "presets", type: "TimeWindowPresetType[]", defaultValue: "5 and 15 min, 1 and 6 hr, 1 and 7 days", description: "The ranges to offer."},
+            {name: "presets", type: "TimeWindowPresetType[]", defaultValue: "5 and 15 min, 1, 6 and 12 hr, 1, 7 and 30 days", description: "The ranges to offer."},
             {name: "utc", type: "boolean", defaultValue: "false", description: "Reads and writes the times in UTC. Match the charts' xAxis.utc."},
             {name: "hideLive", type: "boolean", defaultValue: "false", description: "Leaves out the button that follows the clock."},
             {name: "precision", type: '"auto" | "minute" | "second" | "millisecond"', defaultValue: "auto", description: "How finely the two times read and can be typed. auto follows the range: milliseconds under a minute, seconds under an hour, and whole minutes above that."},
+            {name: "opens", type: '"auto" | "leftward" | "rightward"', defaultValue: "auto", description: "Which way what opens from the range runs. auto runs into the page, so leftward from a control on the right of it. Whichever this is, it stays on the page."},
             {name: "labels", type: "TimeWindowLabelsType", description: "What assistive technology calls each part. None has a default, so none assumes a language."},
         ],
         methods: [
             {name: "new TimeWindow(options?)", description: "Makes a window, on the last hour unless options say otherwise. Takes span, range, live, refreshMs and now. This and the rest here are the window's, not the control's."},
             {name: "getRange() / getSpan() / isLive() / now()", description: "Where the window is, and the time on its clock."},
+            {name: "toText() / setFromText(text)", description: "The range as text to copy or link to: now-6h, live-6h, or start/end in ISO 8601. setFromText also takes a URL holding one, and says whether it could read it."},
+            {name: "isRelative()", description: "Whether the range is the latest so-long rather than two fixed times."},
+            {name: "getRefreshMs() / getNextTick()", description: "How often a live window moves, and when it next will."},
             {name: "contains(time)", description: "Whether a moment is in the range, for filtering what a panel with no time axis shows."},
             {name: "setRange(from, to)", description: "Looks at a fixed range, and stops following the clock."},
             {name: "setLast(span)", description: "Looks at the latest span milliseconds, still following the clock if it was."},
@@ -772,13 +775,14 @@ const dashboardDocs: ComponentDoc[] = [
                 {name: "live", type: "boolean", defaultValue: "false", description: "Starts following the clock."},
                 {name: "refreshMs", type: "number", defaultValue: "5000", description: "How often a live window moves."},
                 {name: "now", type: "() => number", defaultValue: "Date.now", description: "The clock, for anything that needs another one."},
+                {name: "urlParam", type: "string", description: "Keeps the range in this query parameter, so the address can be shared. Replaces the current history entry rather than adding one."},
             ]},
             {name: "TimeWindowPresetType", description: "One choice in the list of ranges.", fields: [
                 {name: "span", type: "number", required: true, description: "How far back it looks, in milliseconds."},
                 {name: "label", type: "string", defaultValue: "the span, worded by the browser's language", description: "Its name in the list."},
             ]},
-            {name: "TimeWindowLabelsType", description: "What assistive technology calls each part of the control. live is also shown beside its dot.", fields: [
-                {name: "previous, next, zoomOut, live, presets, from, to", type: "string", description: "One name for each."},
+            {name: "TimeWindowLabelsType", description: "What assistive technology calls each part of the control. live is also shown beside its dot, and from and to above their fields.", fields: [
+                {name: "previous, next, zoomOut, live, range, filter, copy, paste, from, to", type: "string", description: "One name for each."},
             ]},
         ],
         examples: [{
@@ -786,14 +790,15 @@ const dashboardDocs: ComponentDoc[] = [
             node: () => {
                 const timeWindow = new TimeWindow({span: 12 * 3_600_000})
                 return <Stack direction="column" gap="md" style={{width: "100%", minWidth: "0"}}>
-                    <TimeWindowControl timeWindow={timeWindow} labels={{previous: "Earlier", next: "Later", zoomOut: "Zoom out", live: "Live", presets: "Time range", from: "From", to: "To"}}/>
+                    <TimeWindowControl timeWindow={timeWindow} style={{justifyContent: "flex-end"}} labels={{previous: "Earlier", next: "Later", zoomOut: "Zoom out", live: "Live", range: "Time range", filter: "Type a range", copy: "Copy this range", paste: "Paste a range", from: "From", to: "To"}}/>
                     <LineChart height={150} timeWindow={timeWindow} animate={false} data={windowDays} series={[{key: "requests", label: "Requests"}]} xAxis={{type: "time"}}/>
                     <BarChart height={150} hover="index" timeWindow={timeWindow} animate={false} data={windowDays} series={[{key: "errors", label: "Errors", color: "var(--warning)"}]} xAxis={{type: "time"}}/>
                 </Stack>
             },
             code: `const timeWindow = new TimeWindow({span: 12 * HOUR})
 
-<TimeWindowControl timeWindow={timeWindow} labels={{previous: "Earlier", next: "Later", ...}}/>
+// Flush right is where a dashboard's time control usually goes
+<TimeWindowControl timeWindow={timeWindow} style={{justifyContent: "flex-end"}} labels={{previous: "Earlier", next: "Later", ...}}/>
 <LineChart timeWindow={timeWindow} data={points} series={[{key: "requests"}]} xAxis={{type: "time"}}/>
 <BarChart timeWindow={timeWindow} data={points} series={[{key: "errors"}]} xAxis={{type: "time"}}/>`,
         }],

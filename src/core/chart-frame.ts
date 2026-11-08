@@ -1,3 +1,5 @@
+import { h } from "./jsx.ts"
+import { Empty, Text } from "./velodesign.ts"
 import { Component, passthroughAttrsToElement } from "./velotype.ts"
 import type { RenderableElements } from "./velotype.ts"
 import {
@@ -57,7 +59,7 @@ export abstract class ChartFrame<AttrsType extends ChartBaseAttrsType> extends C
     #chartId = nextChartId++
     /** The `<svg>` being drawn right now, which is where a pattern's definition has to go */
     #drawing: SVGElement | undefined
-    #tableTimer = 0
+    #tableTimer: ReturnType<typeof setTimeout> | 0 = 0
     /** Where the drawing starts inside the root, which is where tooltip coordinates are measured from */
     #drawingTop = 0
     /** What each drawn mark says. A WeakMap, so a redraw's discarded elements go with their marks */
@@ -111,10 +113,7 @@ export abstract class ChartFrame<AttrsType extends ChartBaseAttrsType> extends C
         this.#root = document.createElement("div")
         this.#root.className = "vtc-chart"
         if (attrs.title !== undefined && attrs.title !== "") {
-            const titleEl = document.createElement("div")
-            titleEl.className = "vtc-chart-title"
-            titleEl.textContent = attrs.title
-            this.#root.appendChild(titleEl)
+            this.#root.appendChild(h(Text, {strong: true, class: "vtc-chart-title"}, attrs.title))
         }
         this.#root.appendChild(this.#svgHost)
         this.#root.appendChild(this.#srHost)
@@ -187,9 +186,7 @@ export abstract class ChartFrame<AttrsType extends ChartBaseAttrsType> extends C
             this.#legendHost.replaceChildren()
             this.#emptyHost.hidden = false
             this.#emptyHost.style.height = `${height}px`
-            this.#emptyHost.replaceChildren(
-                document.createTextNode(attrs.emptyMessage ?? String(ChartThemeOptions.emptySymbol({}, [])))
-            )
+            this.#emptyHost.replaceChildren(h(Empty, {title: attrs.emptyMessage}))
             return
         }
         this.#emptyHost.hidden = true

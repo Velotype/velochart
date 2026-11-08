@@ -7,7 +7,7 @@ file documents what every chart here follows, so a new chart looks and behaves l
 
 ## Layout
 
-- **`src/<category>/<name>.ts`** - one file per chart, in the folder for its category. The folder and
+- **`src/<category>/<name>.ts`** (or `.tsx`, with the pragmas in "velotype JSX gotchas") - one file per chart, in the folder for its category. The folder and
   the chart's `group` in `showcase/src/data/docs.tsx` are the same fact, and must agree.
 
   | Folder | Holds |
@@ -98,10 +98,27 @@ fixed-size: it is a glyph, with no observer, axes, legend or tooltip.
 hues at two lightness steps. Never add a hex literal to a chart: it will look right in one theme and
 wrong in the other.
 
-**Theming is a contract of CSS custom properties, not a dependency.** The library imports velotype
-alone. velodesign is a dev dependency, used by the showcase and the gallery, and its `Theme` defines
-the variables charts read. Introducing a new variable into `src/` changes that contract, and the list
-in `readme.md` has to change with it.
+**velodesign is the general component library, and velochart is built on it.** Only what is specific to
+charts is built here. Anything a design library would hold comes from velodesign, through
+`src/core/velodesign.ts`: a chart's title is a `Text`, its legend a `Stack` of `Button`s, its empty state an
+`Empty`, and `TimeWindowControl` is a `Popover`, `Button`s, a `Stack`, a `Grid` and so on. They are restyled
+from this package's own cascade layer, which always beats velodesign's.
+
+Before writing any component here, check `velodesign/src/`. If velodesign has one that nearly fits, add what
+is missing there as a general feature with its own tests, as `Popover`'s `align` and `close()` were, and
+don't work around it here. If it has none and any app might want one, build it in velodesign.
+
+What stays here, and why:
+
+- **A chart's drawing**, in SVG: marks, axes and the range slider.
+- **`ChartTooltip`**, which follows the pointer through a drawing, reading a pooled set of rows updated at
+  display rate with no layout read per move. velodesign's `Tooltip` is a bubble fixed to one trigger.
+- **The hidden data table**, a bare `<table>` that is never seen, up to `maxTableRows` long, rebuilt with the
+  data. velodesign's `Table` is about how a table looks and adds nothing here but cost.
+
+**Theming is a contract of CSS custom properties.** velodesign's `Theme` defines the variables charts
+read. Introducing a new variable into `src/` changes that contract, and the list in `readme.md` has to
+change with it.
 
 **No baked-in English.** Labels are passed by the consumer, and `ariaLabel` and a hidden table's column
 headers have no default. A label a reader sees defaults to a symbol (`BoxPlotChart`'s `x̃`, `CandlestickChart`'s
@@ -148,7 +165,7 @@ what a label already says.
 
 ## velotype JSX gotchas
 
-These apply to the showcase and the gallery today, and to `src/` if a chart ever uses JSX:
+These apply to the showcase, the gallery and any `.tsx` in `src/`:
 
 1. **`{condition && <jsx/>}` prints `false` or `0`** when the condition is falsy and not `undefined`.
    Use a ternary with `null`.
@@ -156,8 +173,8 @@ These apply to the showcase and the gallery today, and to `src/` if a chart ever
    `getComponent<T>(<ClassComponent/>)` to call a method on it.
 3. **A JSX value in a shared constant is built once**; embedding it twice moves it and leaves the first
    place empty. That is why `ExampleDoc.node` is a factory.
-4. **A `.tsx` file in `src/` needs the `@jsxRuntime classic` and `@jsx h` pragmas**, and a `src/core/jsx.ts`
-   like velodesign's. A consumer compiles this package with the `jsx` mode but not the factory, so a
+4. **A `.tsx` file in `src/` needs the `@jsxRuntime classic` and `@jsx h` pragmas**, importing `h` from
+   `src/core/jsx.ts`. A consumer compiles this package with the `jsx` mode but not the factory, so a
    file without them calls `React.createElement`. `deno task check-jsx` catches it.
 
 ## One copy of velotype
@@ -207,11 +224,12 @@ Astral suite is served under `require-trusted-types-for 'script'`, so a test tha
 ## The bundle size is measured, not asserted
 
 `scripts/bundle-size.ts` bundles `src/index.ts` minified and reports raw and gzip bytes, both with
-velotype inlined and with it held out. `deno task size --write` generates
+velotype and velodesign inlined and with them held out. `deno task size --write` generates
 `showcase/src/data/bundle-size.ts`, which is never committed, so run it once before `deno check`-ing the
 showcase in a fresh clone.
 
-**`src/core/velotype.ts` is the only module in `src/` that names `@velotype/velotype`.** esbuild emits one
-import statement per source module that imports an external package and keeps it even when that module
-is tree-shaken out, so going around the barrel costs every consumer bytes. The script asserts exactly
-one statement.
+**`src/core/velotype.ts` and the JSX factory `src/core/jsx.ts` are the only modules in `src/` that name
+`@velotype/velotype`, and `src/core/velodesign.ts` the only one naming `@velotype/velodesign`.** esbuild
+emits one import statement per source module that imports an external package and keeps it even when
+that module is tree-shaken out, so going around the barrels costs every consumer bytes. The script
+asserts the count.

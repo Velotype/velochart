@@ -233,6 +233,8 @@ color:var(--background-9);
 .vtc-showcase-sidebar .vtd-tree-label .vtd-nav-link-active .vtd-sidebar-label{color:var(--primary-8);}
 .vtc-showcase-sidebar-count{font-size:0.75em;}
 .vtc-showcase-main{flex-grow:1;min-width:0;isolation:isolate;}
+/* An open popover has to reach over the chrome, and the isolation above would keep it under the sidebar */
+.vtc-showcase-main:has(.vtd-popover-open){position:relative;z-index:2;}
 /*
  * The frame every routed page draws itself in. It belongs to the shell rather than to any one
  * page: the component pages and the theme builder both wear it, and while it lived in

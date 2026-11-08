@@ -4,7 +4,7 @@
     "jsr:@std/encoding@^1.0.11": "1.0.11",
     "jsr:@std/http@^1.1.3": "1.1.4",
     "jsr:@std/media-types@^1.1.0": "1.1.0",
-    "jsr:@velotype/velodesign@0.2": "0.2.0",
+    "jsr:@velotype/velodesign@0.3": "0.3.0",
     "jsr:@velotype/veloserver@0.2": "0.2.0",
     "jsr:@velotype/velotype@~0.3.1": "0.3.2"
   },
@@ -21,8 +21,8 @@
     "@std/media-types@1.1.0": {
       "integrity": "c9d093f0c05c3512932b330e3cc1fe1d627b301db33a4c2c2185c02471d6eaa4"
     },
-    "@velotype/velodesign@0.2.0": {
-      "integrity": "87194e39068745ad26ec6f4d0bb55068b1daf40ef3a15ae45b8bfa332ac817a4",
+    "@velotype/velodesign@0.3.0": {
+      "integrity": "6abfb38a7cfa99f7d11c03fec8551237932b376317f2dc3743fb68709c100534",
       "dependencies": [
         "jsr:@velotype/velotype"
       ]
@@ -40,7 +40,7 @@
   },
   "workspace": {
     "dependencies": [
-      "jsr:@velotype/velodesign@0.2",
+      "jsr:@velotype/velodesign@0.3",
       "jsr:@velotype/veloserver@0.2",
       "jsr:@velotype/velotype@~0.3.1"
     ],
@@ -50,6 +50,7 @@
           "jsr:@astral/astral@~0.5.4",
           "jsr:@std/assert@^1.0.16",
           "jsr:@std/testing@^1.0.16",
+          "jsr:@velotype/velodesign@0.3",
           "jsr:@velotype/veloserver@0.2",
           "jsr:@velotype/velotype@~0.3.1"
         ]

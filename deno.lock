@@ -24,6 +24,7 @@
     "jsr:@std/path@1": "1.1.6",
     "jsr:@std/path@^1.0.8": "1.1.6",
     "jsr:@std/testing@^1.0.16": "1.0.20",
+    "jsr:@velotype/velodesign@0.3": "0.3.0",
     "jsr:@velotype/veloserver@0.2": "0.2.0",
     "jsr:@velotype/velotype@~0.3.1": "0.3.2",
     "jsr:@zip-js/zip-js@^2.7.52": "2.17.0"
@@ -113,6 +114,12 @@
         "jsr:@std/internal@^1.0.14"
       ]
     },
+    "@velotype/velodesign@0.3.0": {
+      "integrity": "6abfb38a7cfa99f7d11c03fec8551237932b376317f2dc3743fb68709c100534",
+      "dependencies": [
+        "jsr:@velotype/velotype"
+      ]
+    },
     "@velotype/veloserver@0.2.0": {
       "integrity": "49e5a7bc5f11fa9ebd280b7b4cf24714391079e57bfac23a727e7a5aaecf1c97",
       "dependencies": [
@@ -132,6 +139,7 @@
       "jsr:@astral/astral@~0.5.4",
       "jsr:@std/assert@^1.0.16",
       "jsr:@std/testing@^1.0.16",
+      "jsr:@velotype/velodesign@0.3",
       "jsr:@velotype/veloserver@0.2",
       "jsr:@velotype/velotype@~0.3.1"
     ]
