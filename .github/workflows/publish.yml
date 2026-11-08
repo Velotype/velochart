@@ -20,4 +20,8 @@ jobs:
       # immutable, so a bad one is permanent.
       - name: Verify the package builds and publishes cleanly
         run: deno publish --dry-run
-      - run: npx jsr publish
+      # The same deno that ran the dry run, signed in through the job's OIDC token. `npx jsr publish`
+      # downloads a deno of its own, which type checks with older DOM types: it once refused a
+      # version this job's dry run had passed.
+      - name: Publish
+        run: deno publish

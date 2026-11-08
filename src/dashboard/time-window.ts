@@ -61,7 +61,10 @@ export function parseTimeRange(text: string, urlParam?: string): ParsedTimeRange
         }
         // Its own name first, then anything else that reads as a range, since a link may be from a page naming it differently
         const named = urlParam !== undefined ? params.get(urlParam) : null
-        for (const value of [...(named !== null ? [named] : []), ...params.values()]) {
+        const values: string[] = named !== null ? [named] : []
+        // forEach rather than values(): every DOM typing an app may compile this under has it
+        params.forEach(value => values.push(value))
+        for (const value of values) {
             const parsed = parseTimeRange(value)
             if (parsed) {
                 return parsed
