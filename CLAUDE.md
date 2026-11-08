@@ -121,8 +121,14 @@ read. Introducing a new variable into `src/` changes that contract, and the list
 change with it.
 
 **No baked-in English.** Labels are passed by the consumer, and `ariaLabel` and a hidden table's column
-headers have no default. A label a reader sees defaults to a symbol (`BoxPlotChart`'s `x̃`, `CandlestickChart`'s
-O, H, L, C). Dates come from `Intl` with no locale named, so they read in the browser's own language.
+headers have no default. A label a reader sees defaults to notation (`BoxPlotChart`'s min, Q1, `x̃`, Q3 and max,
+`CandlestickChart`'s O, H, L, C). Dates come from `Intl` with no locale named, so they read in the browser's own language.
+
+**Icons are drawn, never text characters, and each one is reviewed before it is used.** A mark comes from
+velodesign's `Glyphs` where one fits (`TimeWindowControl`'s chevrons, zoom-out and copied tick), and is
+otherwise a line drawing in the same style: a 24-unit box, round ends, a 2-unit line, through velodesign's
+`Icon`. A tooltip row can draw one in place of its label's text (`TooltipRow.mark`, the box plot's whisker
+ends); the label still names the row in the hidden table, an export and the live region, where only text works.
 
 Details worth keeping, each of which looked fine until it didn't:
 

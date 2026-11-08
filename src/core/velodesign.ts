@@ -9,4 +9,4 @@
  * enumerate the names behind `export *`. `scripts/bundle-size.ts` asserts the bundle has one import
  * statement for velodesign.
  */
-export { Button, ButtonGroup, DateTimePicker, Empty, FormField, Grid, I, Icon, Popover, registerIcon, Stack, Text, TextBox } from "@velotype/velodesign"
+export { Button, ButtonGroup, DateTimePicker, Empty, FormField, Glyphs, Grid, I, Icon, Popover, Stack, Text, TextBox } from "@velotype/velodesign"

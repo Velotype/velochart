@@ -32,6 +32,9 @@ class Gallery extends Component<EmptyAttrs> {
                 {label: "A", values: [1, 2, 3, 4, 5, 6, 7, 8, 9, 100]},
                 {label: "B", summary: {min: 2, q1: 3, median: 5, q3: 7, max: 9}},
             ]}/></div>
+            <div id="boxplot-labelled"><BoxPlotChart height={160} labels={{min: "Low", q1: "Q1", median: "Mid", q3: "Q3", max: "High"}} data={[
+                {label: "A", summary: {min: 2, q1: 3, median: 5, q3: 7, max: 9}},
+            ]}/></div>
             <div id="candles-chart"><CandlestickChart data={candles} height={200}/></div>
             <div id="ohlc-chart"><CandlestickChart data={candles} variant="ohlc" height={160}/></div>
             <div id="heatmap-chart"><Heatmap height={180} showValues columns={["Mon", "Tue", "Wed"]} rows={["am", "pm"]} values={[[1, 2, 3], [4, undefined, 6]]}/></div>
