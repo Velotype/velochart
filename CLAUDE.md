@@ -190,7 +190,7 @@ the package works on a page with a strict Trusted Types policy.
 Two checks guard it. `deno task check-html-strings` refuses those APIs in CI, and every page in the
 Astral suite is served under `require-trusted-types-for 'script'`, so a test that reaches one throws.
 
-## Changes reach `main` through a pull request, and CI is the reviewer
+## Changes reach `main` through a pull request
 
 `main` is protected: no direct pushes, no force-pushes, no deletion, squash merges only, no bypass.
 
@@ -199,13 +199,10 @@ Astral suite is served under `require-trusted-types-for 'script'`, so a test tha
 | `ci.yml` - *Typecheck, lint and publish dry run* | PR + push to main | `deno check` on the package, showcase and tests; `deno lint`; `deno task check-jsx`; `deno task check-baseline`; `deno task check-html-strings`; `deno publish --dry-run` |
 | `ci.yml` - *Astral suite* | PR + push to main | `deno task test`, which bundles the gallery and drives it |
 | `bundle-size.yml` | PR | Comments the size against the base branch. Advisory |
-| `auto-merge.yml` | PR | Turns on GitHub's auto-merge, so a non-draft PR from a branch here merges once the required checks pass |
 | `pages.yml` | Push to main | Deploys the showcase |
 | `publish.yml` | Manual | `deno publish --dry-run`, then `npx jsr publish` |
 
-**Anything meant to wait for a person must be a draft PR**: a non-draft one lands as soon as CI is green.
-A merge made by the workflow token does not start the Pages deploy, so `AUTO_MERGE_TOKEN` (a token with
-pull-request write access) needs to be set for merges to deploy on their own.
+**A pull request waits for a person to merge it**, once the required checks pass; nothing merges on its own.
 
 ## The bundle size is measured, not asserted
 

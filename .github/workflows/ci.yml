@@ -1,8 +1,7 @@
 name: CI
 
-# Every merge to main goes through a pull request, and these checks are what stands in for the
-# human reviewer this project does not have. They are required by the ruleset on main, so a PR
-# cannot auto-merge until all of them pass.
+# Every merge to main goes through a pull request, and these checks are required by the ruleset on
+# main, so a PR cannot be merged until all of them pass. A person merges it.
 on:
   pull_request:
     branches: [main]
@@ -80,6 +79,13 @@ jobs:
       # avoids a per-run download of its own copy.
       - name: Record the browser Astral should drive
         run: echo "CHROME_PATH=$(which google-chrome || which chromium-browser || which chromium)" >> "$GITHUB_ENV"
+
+      # The suite bundles the gallery modules in parallel, and on a cold cache they race each other
+      # extracting deno's bundled esbuild binary ("failed to copy esbuild binary"). Bundling one
+      # module first, alone, materialises it once and removes the race, as velodesign's CI does.
+      - name: Warm the bundler's esbuild binary
+        run: deno task bundle-charts
+        working-directory: tests
 
       # Bundles every gallery module, then drives them. tests/build/ is gitignored, so this builds
       # them from scratch on every run.
