@@ -190,7 +190,7 @@ the package works on a page with a strict Trusted Types policy.
 Two checks guard it. `deno task check-html-strings` refuses those APIs in CI, and every page in the
 Astral suite is served under `require-trusted-types-for 'script'`, so a test that reaches one throws.
 
-## Changes reach `main` through a pull request, and CI is the reviewer
+## Changes reach `main` through a pull request
 
 `main` is protected: no direct pushes, no force-pushes, no deletion, squash merges only, no bypass.
 
