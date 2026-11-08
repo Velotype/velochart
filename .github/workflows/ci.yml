@@ -80,6 +80,13 @@ jobs:
       - name: Record the browser Astral should drive
         run: echo "CHROME_PATH=$(which google-chrome || which chromium-browser || which chromium)" >> "$GITHUB_ENV"
 
+      # The suite bundles the gallery modules in parallel, and on a cold cache they race each other
+      # extracting deno's bundled esbuild binary ("failed to copy esbuild binary"). Bundling one
+      # module first, alone, materialises it once and removes the race, as velodesign's CI does.
+      - name: Warm the bundler's esbuild binary
+        run: deno task bundle-charts
+        working-directory: tests
+
       # Bundles every gallery module, then drives them. tests/build/ is gitignored, so this builds
       # them from scratch on every run.
       - name: Run the suite
