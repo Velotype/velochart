@@ -201,7 +201,8 @@ enhancement the page works without, marked with a JS comment - `// baseline-ok: 
 it>` - at the end of the line or on its own line above. Never a CSS comment inside a stylesheet string,
 which would ship in every consumer's bundle.
 
-`deno task check-baseline` enforces this in CI with the same deny-list as velodesign.
+`deno task check-baseline` enforces this in CI. It runs `jsr:@velotype/velobaseline`, pinned to a
+version, over `src/` and `showcase/src/`: the deny-list every Velotype repository shares.
 
 ## No HTML strings
 
