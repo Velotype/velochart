@@ -18,7 +18,7 @@
     },
     "tasks": {
         "check-jsx": "deno run -A ./scripts/check-jsx-factory.ts",
-        "check-baseline": "deno run --allow-read ./scripts/check-baseline.ts",
+        "check-baseline": "deno run --no-lock --allow-read jsr:@velotype/velobaseline@0.1.1 src/ showcase/src/",
         "check-html-strings": "deno run --allow-read ./scripts/check-html-strings.ts",
         "size": "deno run --allow-read --allow-write --allow-run --allow-env ./scripts/bundle-size.ts",
         "test": "cd ./tests/ && deno run -A ./bundle.ts && cd .. && deno test --allow-read --allow-net --allow-sys --allow-env --allow-write --allow-run tests/"
