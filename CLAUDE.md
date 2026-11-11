@@ -216,7 +216,9 @@ Astral suite is served under `require-trusted-types-for 'script'`, so a test tha
 
 ## Changes reach `main` through a pull request
 
-`main` is protected: no direct pushes, no force-pushes, no deletion, squash merges only, no bypass.
+`main` is protected: no direct pushes, no force-pushes, no deletion, no bypass. A pull request
+merges as a merge commit (squash and rebase are allowed too), as in every repository this work spans:
+its own commits then land on `main`, so a pull request built on it still merges cleanly.
 
 | Workflow | Runs on | What it gates |
 |---|---|---|
