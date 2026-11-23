@@ -16,8 +16,9 @@
         "@velotype/veloserver": "jsr:@velotype/veloserver@^0.2.0",
         "@velotype/velodesign": "jsr:@velotype/velodesign@^0.4.1",
         "@velotype/velochart": "../src/index.ts",
-        "@velotype/velotype/jsx-runtime": "jsr:@velotype/velotype@^0.3.1",
-        "@velotype/velotype": "jsr:@velotype/velotype@^0.3.1"
+        "@velotype/velotype/jsx-runtime": "jsr:@velotype/velotype@^0.3.6",
+        "@velotype/velotype/devtools": "jsr:@velotype/velotype@^0.3.6/devtools",
+        "@velotype/velotype": "jsr:@velotype/velotype@^0.3.6"
     },
     "lint": {
         "rules": {

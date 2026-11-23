@@ -35,7 +35,10 @@ file documents what every chart here follows, so a new chart looks and behaves l
 2. A section in a gallery in `tests/test_modules/`, each rendering charts side by side in light and
    dark: `charts.tsx`, or `more-charts.tsx` for the newer types. `features.tsx` has one chart per
    behaviour, and `large.tsx` the heavy ones, on a page of their own because they slow every test on it.
-3. `tests/basic_tests.test.ts` assertions for anything interactive or stateful.
+3. `tests/basic_tests.test.ts` assertions for anything interactive or stateful. Every test also
+   checks for leaks: each gallery page loads `tests/leaks.ts`, and after each test the suite fails one
+   that leaves velotype holding what the page no longer shows (velotype's `findLeaks()`) - a
+   Component left mounted off the page or never placed, a RenderObject drawn nowhere.
 4. `showcase/src/data/docs.tsx`: its group, description, attrs table, named types and examples. A new
    category also needs an entry in `groupOrder` and an icon in `data/category-icons.ts`.
 5. The docs in the `velotype.github.io` repo (`content/docs/velochart/`), and `readme.md`'s list.

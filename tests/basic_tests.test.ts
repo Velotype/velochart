@@ -118,6 +118,12 @@ describe('chart rendering', () => {
                     const selection = await page.waitForSelector(selector)
                     if (selection) {
                         await testFn(selection)
+                        // Nothing the test took out may stay held (leaks.ts) - unless the test left the
+                        // module's page, as one following a link does
+                        const leaks = await page.evaluate(`location.pathname === "/${module}" ? globalThis.__leaks() : null`)
+                        if (leaks !== null) {
+                            assertEquals(leaks, {mountedOffPage: [], neverPlaced: [], heldOffPage: 0}, `${module}: velotype holds what the page no longer shows`)
+                        }
                     } else {
                         fail(`ERROR: Selector not found`)
                     }
