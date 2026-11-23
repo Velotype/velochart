@@ -31,6 +31,7 @@ function galleryPage(script: string): Response {
 window.cspViolations = []
 document.addEventListener("securitypolicyviolation", (e) => window.cspViolations.push(e.sample))
 </script>
+<script src="/build/leaks.js" type="module"></script>
 <script src="/build/${script}.js" type="module" ></script>
 </body></html>`,{status:200})
     response.headers.set("content-type", "text/html; charset=utf-8")

@@ -60,12 +60,14 @@ export async function bundleModules(requested: string[], force: boolean): Promis
     const modules = requested.length > 0 ? requested : [...known].sort()
     const floor = Math.max(await newestMtime(srcDir), await mtimeOf(`${here}bundle.ts`))
 
-    const stale: string[] = []
-    for (const name of modules) {
-        const output = await mtimeOf(`${here}build/${name}.js`)
-        const source = await mtimeOf(`${here}test_modules/${name}.tsx`)
+    // Every page also loads leaks.ts (base_server.ts), whatever subset is asked for
+    const entries = [...modules.map(name => ({name, source: `./test_modules/${name}.tsx`})), {name: "leaks", source: "./leaks.ts"}]
+    const stale: {name: string, source: string}[] = []
+    for (const entry of entries) {
+        const output = await mtimeOf(`${here}build/${entry.name}.js`)
+        const source = await mtimeOf(`${here}${entry.source}`)
         if (force || output === 0 || output < Math.max(floor, source)) {
-            stale.push(name)
+            stale.push(entry)
         }
     }
 
@@ -85,9 +87,9 @@ export async function bundleModules(requested: string[], force: boolean): Promis
     const failures: string[] = []
     const worker = async () => {
         while (next < stale.length) {
-            const name = stale[next++]
+            const {name, source} = stale[next++]
             const result = await new Deno.Command(Deno.execPath(), {
-                args: ["bundle", `./test_modules/${name}.tsx`, "--output", `./build/${name}.js`, "--sourcemap=linked", "--quiet"],
+                args: ["bundle", source, "--output", `./build/${name}.js`, "--sourcemap=linked", "--quiet"],
                 cwd: here, stdout: "null", stderr: "piped",
             }).output()
             if (!result.success) {
@@ -99,7 +101,7 @@ export async function bundleModules(requested: string[], force: boolean): Promis
     if (failures.length > 0) {
         throw new Error(`bundling failed:\n  ${failures.join("\n  ")}`)
     }
-    return {built: stale.length, skipped: modules.length - stale.length}
+    return {built: stale.length, skipped: entries.length - stale.length}
 }
 
 if (import.meta.main) {
